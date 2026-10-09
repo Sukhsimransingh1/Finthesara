@@ -1,1 +1,5 @@
-"""Reserved for future LangGraph orchestration; intentionally empty in Phase 0."""
+"""LangGraph workflow definitions for financial research."""
+
+from app.graph.workflow import build_research_graph
+
+__all__ = ["build_research_graph"]

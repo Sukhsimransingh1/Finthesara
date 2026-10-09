@@ -1,1 +1,1 @@
-"""API routing package."""
+"""FastAPI API package."""

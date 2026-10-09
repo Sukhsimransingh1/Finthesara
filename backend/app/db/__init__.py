@@ -1,1 +1,1 @@
-"""Database configuration boundary for PostgreSQL/Supabase."""
+"""Database configuration and explicit connection boundaries for PostgreSQL/Supabase."""

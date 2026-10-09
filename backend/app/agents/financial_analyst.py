@@ -1,0 +1,300 @@
+from __future__ import annotations
+
+from datetime import date
+from typing import Any
+
+from app.agents.schemas import (
+    AgentResult,
+    AgentStatus,
+    FinancialAnalystOutput,
+    ResearchTaskType,
+)
+from app.agents.state import ResearchState
+from app.tools.data_source import FinancialDataSource
+from app.tools.financial_analysis import FinancialAnalysisTools
+from app.tools.schemas import (
+    ExpenseTrendInput,
+    FinancialDataQuery,
+    FinancialPeriod,
+    MetricType,
+    RevenueAnalysisInput,
+)
+
+
+class FinancialAnalystAgent:
+    """Run deterministic financial analysis using typed financial tools."""
+
+    name = "financial_analyst"
+
+    def __init__(
+        self,
+        *,
+        data_source: FinancialDataSource,
+        analysis_tools: FinancialAnalysisTools | None = None,
+    ) -> None:
+        self.data_source = data_source
+        self.analysis_tools = analysis_tools or FinancialAnalysisTools()
+
+    def run(self, state: ResearchState) -> dict[str, object]:
+        plan = state.get("research_plan")
+
+        if plan is None:
+            return {
+                "financial_results": [],
+                "calculations": [],
+                "agent_results": [
+                    AgentResult(
+                        agent_name=self.name,
+                        status=AgentStatus.FAILED,
+                        summary=(
+                            "Financial analysis could not start "
+                            "without a research plan."
+                        ),
+                        errors=["research_plan is missing from research state."],
+                    )
+                ],
+            }
+
+        financial_tasks = [
+            task
+            for task in plan.tasks
+            if task.task_type == ResearchTaskType.FINANCIAL_ANALYSIS
+        ]
+
+        if not financial_tasks:
+            return {
+                "financial_results": [],
+                "calculations": [],
+                "agent_results": [
+                    AgentResult(
+                        agent_name=self.name,
+                        status=AgentStatus.COMPLETED,
+                        summary="No financial analysis task was required.",
+                    )
+                ],
+            }
+
+        companies = plan.companies or self._infer_companies(state)
+
+        if not companies:
+            return {
+                "financial_results": [],
+                "calculations": [],
+                "agent_results": [
+                    AgentResult(
+                        agent_name=self.name,
+                        status=AgentStatus.FAILED,
+                        summary=(
+                            "No company could be identified "
+                            "for financial analysis."
+                        ),
+                        errors=[
+                            "No company was provided in the research state."
+                        ],
+                    )
+                ],
+            }
+
+        financial_results: list[dict[str, object]] = []
+        calculations: list[dict[str, object]] = []
+
+        for company in companies:
+            result = self._analyze_company(
+                company=company,
+                state=state,
+            )
+
+            financial_results.append(result.model_dump())
+            calculations.extend(result.calculations)
+
+        agent_result = AgentResult(
+            agent_name=self.name,
+            status=AgentStatus.COMPLETED,
+            summary=(
+                "Completed deterministic financial analysis "
+                f"for {len(companies)} company(s)."
+            ),
+            data={
+                "companies_analyzed": companies,
+                "calculation_count": len(calculations),
+            },
+        )
+
+        return {
+            "financial_results": financial_results,
+            "calculations": calculations,
+            "agent_results": [agent_result],
+        }
+
+    def _analyze_company(
+        self,
+        *,
+        company: str,
+        state: ResearchState,
+    ) -> FinancialAnalystOutput:
+        findings: list[str] = []
+        calculations: list[dict[str, Any]] = []
+        anomalies: list[str] = []
+        source_ids: list[str] = []
+
+        metrics = self._required_metrics(state)
+        periods = self._periods_from_state(state)
+
+        for metric in metrics:
+            query = FinancialDataQuery(
+                company=company,
+                metric=metric,
+                periods=periods,
+            )
+
+            data_result = self.data_source.query(query)
+
+            if not data_result.values:
+                continue
+
+            values = data_result.values
+
+            source_ids.extend(
+                value.source_id
+                for value in values
+                if value.source_id is not None
+            )
+
+            if metric == MetricType.REVENUE and len(values) >= 2:
+                revenue_result = self.analysis_tools.analyze_revenue(
+                    RevenueAnalysisInput(
+                        company=company,
+                        periods=values,
+                    )
+                )
+
+                calculations.extend(
+                    item.model_dump()
+                    for item in revenue_result.calculations
+                )
+
+                findings.append(
+                    f"Revenue analysis for {company}: "
+                    f"{revenue_result.trend} trend."
+                )
+
+            elif (
+                metric == MetricType.OPERATING_EXPENSE
+                and len(values) >= 2
+            ):
+                expense_result = self.analysis_tools.analyze_expense_trend(
+                    ExpenseTrendInput(
+                        company=company,
+                        periods=values,
+                    )
+                )
+
+                calculations.extend(
+                    item.model_dump()
+                    for item in expense_result.calculations
+                )
+
+                findings.append(
+                    f"Operating expense analysis for {company}: "
+                    f"{expense_result.trend} trend."
+                )
+
+                if expense_result.anomaly_detected:
+                    anomalies.append(
+                        f"Operating expense anomaly detected for {company}."
+                    )
+
+        return FinancialAnalystOutput(
+            company=company,
+            findings=findings,
+            calculations=calculations,
+            anomalies=anomalies,
+            source_ids=source_ids,
+        )
+
+    @staticmethod
+    def _required_metrics(
+        state: ResearchState,
+    ) -> list[MetricType]:
+        plan = state.get("research_plan")
+
+        if plan is None:
+            return [
+                MetricType.REVENUE,
+                MetricType.OPERATING_EXPENSE,
+            ]
+
+        if plan.required_metrics:
+            metrics: list[MetricType] = []
+
+            for value in plan.required_metrics:
+                try:
+                    metrics.append(MetricType(value))
+                except ValueError:
+                    continue
+
+            if metrics:
+                return metrics
+
+        return [
+            MetricType.REVENUE,
+            MetricType.OPERATING_EXPENSE,
+        ]
+
+    @staticmethod
+    def _periods_from_state(
+        state: ResearchState,
+    ) -> list[FinancialPeriod]:
+        start_value = state.get("time_range_start")
+        end_value = state.get("time_range_end")
+
+        if start_value is None or end_value is None:
+            today = date.today()
+
+            return [
+                FinancialPeriod(
+                    label=str(today.year),
+                    start_date=date(today.year, 1, 1),
+                    end_date=today,
+                )
+            ]
+
+        start_date = date.fromisoformat(start_value)
+        end_date = date.fromisoformat(end_value)
+
+        if start_date > end_date:
+            raise ValueError(
+                "time_range_start cannot be after time_range_end."
+            )
+
+        periods: list[FinancialPeriod] = []
+
+        for year in range(start_date.year, end_date.year + 1):
+            period_start = max(
+                start_date,
+                date(year, 1, 1),
+            )
+
+            period_end = min(
+                end_date,
+                date(year, 12, 31),
+            )
+
+            if period_start <= period_end:
+                periods.append(
+                    FinancialPeriod(
+                        label=str(year),
+                        start_date=period_start,
+                        end_date=period_end,
+                    )
+                )
+
+        return periods
+
+    @staticmethod
+    def _infer_companies(
+        state: ResearchState,
+    ) -> list[str]:
+        companies = state.get("companies", [])
+
+        return list(companies)

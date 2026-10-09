@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     supabase_url: str | None = None
     supabase_anon_key: SecretStr | None = None
     supabase_service_role_key: SecretStr | None = None
+    embedding_dimension: int = Field(default=768, ge=1, le=10000)
 
     langsmith_tracing: bool = False
     langsmith_api_key: SecretStr | None = None
@@ -34,7 +35,7 @@ class Settings(BaseSettings):
     llm_provider: str = "groq"
     llm_base_url: str = "https://api.groq.com/openai/v1"
     llm_api_key: SecretStr | None = None
-    llm_model: str = "llama-3.3-70b-versatile"
+    llm_model: str = "openai/gpt-oss-20b"
     llm_timeout_seconds: int = Field(default=30, ge=1, le=300)
 
 

@@ -1,1 +1,1 @@
-"""Reserved for future specialized agents; intentionally empty in Phase 0."""
+"""Agent implementations for financial research workflows."""

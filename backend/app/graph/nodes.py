@@ -1,0 +1,439 @@
+from __future__ import annotations
+
+from typing import Any, cast
+
+from app.agents.financial_analyst import FinancialAnalystAgent
+from app.agents.llm_planner import LLMResearchPlannerAgent
+from app.agents.llm_researcher import LLMResearchAgent
+from app.agents.llm_synthesizer import LLMSynthesisAgent
+from app.agents.llm_verifier import LLMVerificationAgent
+from app.agents.planner import ResearchPlannerAgent
+from app.agents.researcher import ResearchAgent
+from app.agents.schemas import Claim, HumanReview
+from app.agents.state import ResearchState
+from app.agents.verifier import VerificationAgent
+
+
+def _read_output(
+    output: Any,
+    field: str,
+    default: Any = None,
+) -> Any:
+    if isinstance(output, dict):
+        return output.get(field, default)
+
+    return getattr(output, field, default)
+
+
+def planner_node(
+    state: ResearchState,
+    *,
+    agent: ResearchPlannerAgent | LLMResearchPlannerAgent | None = None,
+) -> dict[str, Any]:
+    planner = agent or ResearchPlannerAgent()
+    output = planner.run(state)
+
+    return {
+        "normalized_question": _read_output(
+            output,
+            "normalized_question",
+            state["original_question"],
+        ),
+        "research_plan": _read_output(
+            output,
+            "research_plan",
+        ),
+        "companies": _read_output(
+            output,
+            "companies",
+            state.get("companies", []),
+        ),
+        "agent_results": _read_output(
+            output,
+            "agent_results",
+            [],
+        ),
+        "errors": _read_output(
+            output,
+            "errors",
+            [],
+        ),
+        "status": "planning_complete",
+    }
+
+
+def financial_node(
+    state: ResearchState,
+    *,
+    agent: FinancialAnalystAgent,
+) -> dict[str, object]:
+    return agent.run(state)
+
+
+def research_node(
+    state: ResearchState,
+    *,
+    agent: ResearchAgent | LLMResearchAgent,
+) -> dict[str, Any]:
+    return agent.run(state)
+
+
+def evidence_fusion_node(
+    state: ResearchState,
+) -> dict[str, Any]:
+    """
+    Mark evidence fusion as complete.
+
+    Evidence is reducer-managed with operator.add, so returning
+    existing evidence here would duplicate it.
+    """
+    return {
+        "status": "evidence_fused",
+    }
+
+
+def verification_node(
+    state: ResearchState,
+    *,
+    agent: VerificationAgent | LLMVerificationAgent,
+) -> dict[str, Any]:
+    output = agent.run(state)
+
+    verification_result = _read_output(
+        output,
+        "result",
+    )
+
+    agent_result = _read_output(
+        output,
+        "agent_result",
+    )
+
+    result: dict[str, Any] = {
+        "verification_result": verification_result,
+        "status": "verification_complete",
+    }
+
+    if agent_result is not None:
+        result["agent_results"] = [agent_result]
+
+    return result
+
+
+def targeted_research_node(
+    state: ResearchState,
+    *,
+    agent: ResearchAgent | LLMResearchAgent,
+) -> dict[str, Any]:
+    current_retry_count = state.get("retry_count", 0)
+    max_retries = state.get("max_retries", 0)
+
+    if current_retry_count >= max_retries:
+        return {
+            "retry_count": current_retry_count,
+            "status": "retry_limit_reached",
+        }
+
+    verification = state.get("verification_result")
+
+    retry_query = state.get(
+        "normalized_question",
+        state["original_question"],
+    )
+
+    if verification is not None:
+        issues: list[str] = []
+
+        verification_status = getattr(
+            verification,
+            "status",
+            None,
+        )
+
+        if verification_status is not None:
+            issues.append(
+                f"Verification status: {verification_status}"
+            )
+
+        verification_issues = getattr(
+            verification,
+            "issues",
+            None,
+        )
+
+        if verification_issues:
+            issues.extend(
+                str(issue)
+                for issue in verification_issues
+            )
+
+        if issues:
+            retry_query = (
+                f"{retry_query}\n\n"
+                "Targeted verification follow-up:\n"
+                + "\n".join(
+                    f"- {issue}"
+                    for issue in issues
+                )
+            )
+
+    retry_state = cast(
+        ResearchState,
+        {
+            **state,
+            "normalized_question": retry_query,
+            "verification_result": None,
+        },
+    )
+
+    result = agent.run(retry_state)
+
+    return {
+        **result,
+        "retry_count": current_retry_count + 1,
+        "status": "targeted_research_complete",
+    }
+
+
+def _extract_calculation_ids(
+    financial_results: list[dict[str, object]],
+) -> list[str]:
+    calculation_ids: list[str] = []
+
+    for financial_result in financial_results:
+        calculations = financial_result.get("calculations", [])
+
+        if not isinstance(calculations, list):
+            continue
+
+        for calculation in calculations:
+            if not isinstance(calculation, dict):
+                continue
+
+            calculation_id = calculation.get("calculation_id")
+
+            if calculation_id is not None:
+                calculation_ids.append(
+                    str(calculation_id)
+                )
+
+    return calculation_ids
+
+
+def _extract_evidence_ids(
+    evidence: list[Any],
+) -> list[str]:
+    evidence_ids: list[str] = []
+
+    for item in evidence:
+        evidence_id = getattr(
+            item,
+            "evidence_id",
+            None,
+        )
+
+        if evidence_id is not None:
+            evidence_ids.append(
+                str(evidence_id)
+            )
+
+    return evidence_ids
+
+
+def _deterministic_synthesis(
+    state: ResearchState,
+) -> dict[str, Any]:
+    question = state.get(
+        "original_question",
+        "",
+    )
+
+    financial_results_raw = state.get(
+        "financial_results",
+        [],
+    )
+
+    financial_results: list[dict[str, object]] = [
+        result
+        for result in financial_results_raw
+        if isinstance(result, dict)
+    ]
+
+    evidence = list(
+        state.get("evidence", [])
+    )
+
+    verification = state.get(
+        "verification_result"
+    )
+
+    existing_claims = list(
+        state.get("claims", [])
+    )
+
+    report_sections: list[str] = [
+        "# Financial Research Report",
+        "",
+        "## Research Question",
+        str(question),
+    ]
+
+    if financial_results:
+        report_sections.extend(
+            [
+                "",
+                "## Financial Analysis",
+                (
+                    f"{len(financial_results)} financial "
+                    "result(s) were produced by the "
+                    "financial analysis agent."
+                ),
+            ]
+        )
+
+    if evidence:
+        report_sections.extend(
+            [
+                "",
+                "## Evidence",
+                (
+                    f"{len(evidence)} evidence item(s) "
+                    "were retrieved and fused."
+                ),
+            ]
+        )
+
+    if verification is not None:
+        verification_status = getattr(
+            verification,
+            "status",
+            "unknown",
+        )
+
+        confidence = getattr(
+            verification,
+            "confidence",
+            None,
+        )
+
+        verification_text = (
+            f"Verification status: "
+            f"{verification_status}."
+        )
+
+        if confidence is not None:
+            verification_text += (
+                f" Confidence: {confidence}."
+            )
+
+        report_sections.extend(
+            [
+                "",
+                "## Verification",
+                verification_text,
+            ]
+        )
+
+    claims = existing_claims
+
+    if not claims:
+        generated_claims: list[Claim] = []
+
+        # This is deliberately first because the report's primary
+        # traceable claim is its verification status.
+        if verification is not None:
+            verification_status = getattr(
+                verification,
+                "status",
+                "unknown",
+            )
+
+            generated_claims.append(
+                Claim(
+                    claim_id="report-verification-status",
+                    statement=(
+                        "The research report verification "
+                        f"status is {verification_status}."
+                    ),
+                    evidence_ids=[],
+                    calculation_ids=[],
+                )
+            )
+
+        if financial_results:
+            generated_claims.append(
+                Claim(
+                    claim_id="claim-financial-analysis",
+                    statement=(
+                        "Financial analysis produced "
+                        "structured results for the "
+                        "research question."
+                    ),
+                    evidence_ids=[],
+                    calculation_ids=(
+                        _extract_calculation_ids(
+                            financial_results
+                        )
+                    ),
+                )
+            )
+
+        if evidence:
+            generated_claims.append(
+                Claim(
+                    claim_id="claim-research-evidence",
+                    statement=(
+                        "The research workflow retrieved "
+                        "traceable supporting evidence."
+                    ),
+                    evidence_ids=(
+                        _extract_evidence_ids(evidence)
+                    ),
+                    calculation_ids=[],
+                )
+            )
+
+        claims = generated_claims
+
+    report = "\n".join(report_sections)
+
+    return {
+        "draft_report": report,
+        "final_report": report,
+        "claims": claims,
+        "status": "synthesis_complete",
+    }
+
+
+def synthesis_node(
+    state: ResearchState,
+    *,
+    agent: LLMSynthesisAgent | None = None,
+) -> dict[str, Any]:
+    if agent is None:
+        return _deterministic_synthesis(state)
+
+    return agent.run(state)
+
+
+def human_review_node(
+    state: ResearchState,
+) -> dict[str, Any]:
+    draft_report = state.get(
+        "draft_report",
+        "",
+    )
+
+    human_review = HumanReview(
+        required=True,
+        decision=None,
+        reviewer_id=None,
+        feedback=None,
+    )
+
+    return {
+        "human_review_required": True,
+        "human_review": human_review,
+        "final_report": draft_report,
+        "status": "awaiting_human_review",
+    }
