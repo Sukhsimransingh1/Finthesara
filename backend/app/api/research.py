@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
-import logging
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -14,6 +15,7 @@ from app.api.schemas import (
 )
 from app.services.research_runner import ResearchRunner
 from app.tools.mock_data_source import InMemoryFinancialDataSource
+
 logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/api/v1/research",
