@@ -1,1 +1,1 @@
-"""FastAPI API package."""
+"""API routes and authentication dependencies."""

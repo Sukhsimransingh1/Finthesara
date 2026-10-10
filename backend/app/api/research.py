@@ -149,22 +149,17 @@ async def _stream_research(
             },
         )
 
-    except Exception:
-        yield _format_sse_event(
-            event="research_error",
-            data={
-                "error": "Research workflow failed.",
-            },
-        )
+    
     except Exception as exc:
         logger.exception("Research workflow failed during streaming")
         yield _format_sse_event(
             event="research_error",
             data={
-                "error": str(exc),
+                "error": "Research workflow failed.",
                 "error_type": type(exc).__name__,
             },
         )
+
 
 
 @router.post("/stream")
