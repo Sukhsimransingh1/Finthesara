@@ -1,0 +1,3 @@
+
+{"case_id":"report-presence-001","question":"Summarize the available financial evidence for Microsoft Corporation and clearly state any data limitations.","project_id":"REPLACE_WITH_A_TEST_PROJECT_UUID","expected_terms":["Microsoft"]}
+{"case_id":"report-presence-002","question":"Explain which sources would be needed to assess Apple's recent revenue trend, and distinguish verified figures from unavailable data.","project_id":"REPLACE_WITH_A_TEST_PROJECT_UUID","expected_terms":["Apple"]}
