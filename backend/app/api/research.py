@@ -14,7 +14,7 @@ from app.api.schemas import (
     ResearchStreamEvent,
 )
 from app.services.research_runner import ResearchRunner
-from app.tools.mock_data_source import InMemoryFinancialDataSource
+from app.tools.sec_data_source import SECFinancialDataSource
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -23,13 +23,14 @@ router = APIRouter(
 )
 
 
+
 def _build_runner() -> ResearchRunner:
-    """Build the production research runner."""
-    data_source = InMemoryFinancialDataSource(metrics=[])
+    """Build the production research runner with SEC financial data."""
     return ResearchRunner(
-        data_source=data_source,
+        data_source=SECFinancialDataSource(),
         production=True,
     )
+
 
 
 def _serialize(value: Any) -> Any:

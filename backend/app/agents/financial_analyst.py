@@ -159,6 +159,22 @@ class FinancialAnalystAgent:
                 for value in values
                 if value.source_id is not None
             )
+            
+            for value in values:
+                source = (
+                    value.source_url
+                    or value.source_id
+                    or "source unavailable"
+                )
+                findings.append(
+                    f"Reported {metric.value.replace('_', ' ')} for "
+                    f"{company}: {value.value} {value.unit or ''}; "
+                    f"period {value.period.label} "
+                    f"({value.period.start_date} to "
+                    f"{value.period.end_date}). "
+                    f"Source: {source}"
+                )
+
 
             if metric == MetricType.REVENUE and len(values) >= 2:
                 revenue_result = self.analysis_tools.analyze_revenue(

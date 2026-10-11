@@ -23,6 +23,7 @@ dependencies = [
   "langchain-openai>=0.3.35",
   "langchain-groq>=0.2,<1.0",
   "python-multipart>=0.0.20,<1.0",
+  "httpx>=0.27,<1.0",
 ]
 
 [dependency-groups]
