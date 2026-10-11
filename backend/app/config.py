@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     llm_api_key: SecretStr | None = None
     llm_model: str = "openai/gpt-oss-20b"
     llm_timeout_seconds: int = Field(default=30, ge=1, le=300)
-
+    sec_user_agent: str = ""
 
 @lru_cache
 def get_settings() -> Settings:

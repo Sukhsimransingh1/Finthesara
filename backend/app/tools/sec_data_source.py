@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from app.config import get_settings
 from app.tools.schemas import (
     FinancialDataQuery,
     FinancialDataResult,
@@ -66,20 +67,22 @@ class SECFinancialDataSource:
         timeout_seconds: float = 20.0,
     ) -> None:
         
-        configured_user_agent = (
-            user_agent
-            if user_agent is not None
-            else os.getenv("SEC_USER_AGENT")
-        )
-        self.user_agent = (configured_user_agent or "").strip()
+        settings = get_settings()
 
+        configured_user_agent = (
+                user_agent
+                if user_agent is not None
+                else getattr(settings, "sec_user_agent", None)
+                or os.getenv("SEC_USER_AGENT")
+            )
+
+        self.user_agent = (configured_user_agent or "").strip()
         self.timeout_seconds = timeout_seconds
         self.headers = {
             "User-Agent": self.user_agent,
             "Accept-Encoding": "gzip, deflate",
             "Accept": "application/json",
         }
-
 
         self._companies: list[dict[str, Any]] | None = None
         self._facts_cache: dict[str, dict[str, Any]] = {}
@@ -420,11 +423,10 @@ class SECFinancialDataSource:
             fiscal_period = fact.get("fp")
 
             if kind == "annual":
-                label = (
-                    f"FY{fiscal_year}"
-                    if fiscal_year is not None
-                    else f"FY ending {end_date.isoformat()}"
-                )
+                # Comparative facts in a later SEC filing may carry the
+                # later filing's fiscal-year metadata. Label by the
+                # actual reporting period's end year instead.
+                label = f"FY{end_date.year}"
             else:
                 label = (
                     f"{fiscal_period} {fiscal_year}"
