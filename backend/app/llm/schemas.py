@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class LLMUsage(BaseModel):
@@ -31,7 +31,13 @@ class PlannerLLMTask(BaseModel):
     required_evidence: list[str] = Field(default_factory=list)
     required_tools: list[str] = Field(default_factory=list)
     completion_criteria: list[str] = Field(default_factory=list)
-
+    @field_validator("metric", mode="before")
+    @classmethod
+    def normalize_metric(cls, value: object) -> object:
+        """Normalize a list of metrics into a single readable string."""
+        if isinstance(value, list):
+            return ", ".join(str(item) for item in value)
+        return value
 
 class PlannerLLMOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -54,6 +60,14 @@ class ResearchLLMOutput(BaseModel):
     source_urls: list[str] = Field(default_factory=list)
     contradictions: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    
+    @field_validator("limitations", mode="before")
+    @classmethod
+    def normalize_limitations(cls, value: object) -> object:
+        """Normalize a single limitation string into a list."""
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        return value
 
 
 class VerificationLLMOutput(BaseModel):

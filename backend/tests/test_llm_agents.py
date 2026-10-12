@@ -143,7 +143,33 @@ def test_llm_planner_creates_research_plan() -> None:
         == ResearchTaskType.FINANCIAL_ANALYSIS
     )
 
+def test_llm_planner_prompt_enforces_output_schema() -> None:
+    llm = FakeLLM(
+        PlannerLLMOutput(
+            normalized_question="Analyze Example Corp revenue.",
+            companies=["Example Corp"],
+            required_metrics=["revenue"],
+            tasks=[
+                PlannerLLMTask(
+                    task_id="task-1",
+                    task_type=ResearchTaskType.FINANCIAL_ANALYSIS.value,
+                    description="Retrieve and analyze revenue.",
+                    required_evidence=["SEC filing"],
+                    required_tools=["revenue_analysis"],
+                    completion_criteria=["Revenue has traceable sources."],
+                )
+            ],
+        )
+    )
 
+    output = LLMResearchPlannerAgent(llm=llm).run(base_state())
+
+    assert output.status == "planned"
+    assert output.companies == ["Example Corp"]
+    assert len(output.research_plan.tasks) == 1
+    assert output.research_plan.tasks[0].task_type == (
+        ResearchTaskType.FINANCIAL_ANALYSIS
+    )
 def test_llm_research_agent_grounds_findings() -> None:
     llm = FakeLLM(
         ResearchLLMOutput(

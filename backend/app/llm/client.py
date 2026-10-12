@@ -7,7 +7,7 @@ from langchain_groq import ChatGroq
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.llm.parser import parse_pydantic
+from app.llm.parser import LLMOutputError, parse_pydantic
 from app.llm.schemas import LLMResponse, LLMUsage
 
 
@@ -20,6 +20,7 @@ class GroqLLMClient:
         model: str | None = None,
         temperature: float = 0.0,
         max_retries: int = 2,
+        max_structured_retries: int = 2,
     ) -> None:
         settings = get_settings()
         api_key = settings.llm_api_key
@@ -27,7 +28,11 @@ class GroqLLMClient:
         if api_key is None:
             raise RuntimeError("LLM_API_KEY is not configured.")
 
+        if max_structured_retries < 0:
+            raise ValueError("max_structured_retries must be non-negative.")
+
         self.model_name = model or settings.llm_model
+        self.max_structured_retries = max_structured_retries
 
         self.llm = ChatGroq(
             model=self.model_name,
@@ -58,6 +63,7 @@ class GroqLLMClient:
             finish_reason=self._extract_finish_reason(response),
         )
 
+    
     def invoke_structured[T: BaseModel](
         self,
         *,
@@ -65,19 +71,45 @@ class GroqLLMClient:
         user_prompt: str,
         schema: type[T],
     ) -> tuple[T, LLMResponse]:
-        """Invoke the LLM and parse the response into a Pydantic model."""
+        """Invoke the LLM and retry a bounded number of invalid outputs."""
 
-        response = self.invoke(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
+        current_prompt = user_prompt
+        last_error: LLMOutputError | None = None
 
-        parsed = parse_pydantic(
-            response.content,
-            schema,
-        )
+        for attempt in range(self.max_structured_retries + 1):
+            response = self.invoke(
+                system_prompt=system_prompt,
+                user_prompt=current_prompt,
+            )
 
-        return parsed, response
+            try:
+                parsed = parse_pydantic(response.content, schema)
+                return parsed, response
+            except LLMOutputError as exc:
+                last_error = exc
+
+                if attempt >= self.max_structured_retries:
+                    break
+
+                current_prompt = (
+                    f"{user_prompt}\n\n"
+                    "CORRECTION REQUIRED: Your previous response did not "
+                    "satisfy the required JSON schema.\n"
+                    f"Validation error: {exc}\n"
+                    "Return a corrected, complete JSON object matching "
+                    "the schema exactly. Include every required field, "
+                    "use the correct types, and do not invent facts."
+                )
+
+        if last_error is not None:
+            raise LLMOutputError(
+                f"Structured output failed after "
+                f"{self.max_structured_retries + 1} attempts: "
+                f"{last_error}"
+            ) from last_error
+
+        raise LLMOutputError("Structured output failed unexpectedly.")
+
 
     @staticmethod
     def _extract_content(content: Any) -> str:
