@@ -352,6 +352,32 @@ class SECFinancialDataSource:
         return None
 
     @staticmethod
+    def _quarter_label(end_date: date, fiscal_period: object) -> str:
+        """Label a quarter from its reported end date, not filing metadata."""
+        quarter = (
+            str(fiscal_period)
+            if fiscal_period in {"Q1", "Q2", "Q3", "Q4"}
+            else "Quarter"
+        )
+        fiscal_year = (
+            end_date.year + 1
+            if fiscal_period in {"Q1", "Q2", "Q3"} and end_date.month >= 10
+            else end_date.year
+        )
+        return f"{quarter} FY{fiscal_year}"
+
+    @staticmethod
+    def _fiscal_year_for_period(end_date: date, fiscal_period: object) -> int:
+        """Return a best-effort fiscal-year label from the reported period.
+
+        Annual SEC facts are labelled using the end year. For non-calendar
+        fiscal years ending in the last quarter, the annual fact's end year
+        is still the fiscal-year label (for example, Apple's FY2024 ended
+        in September 2024).
+        """
+        return end_date.year
+
+    @staticmethod
     def _source_url(
         *,
         cik: int,
@@ -419,20 +445,15 @@ class SECFinancialDataSource:
             if not value.is_finite():
                 continue
 
-            fiscal_year = fact.get("fy")
             fiscal_period = fact.get("fp")
 
             if kind == "annual":
-                # Comparative facts in a later SEC filing may carry the
-                # later filing's fiscal-year metadata. Label by the
-                # actual reporting period's end year instead.
-                label = f"FY{end_date.year}"
+                # Use the reporting period end year, not the SEC fact's
+                # filing metadata, which can refer to a later comparative filing.
+                label = f"FY{self._fiscal_year_for_period(end_date, fiscal_period)}"
             else:
-                label = (
-                    f"{fiscal_period} {fiscal_year}"
-                    if fiscal_period and fiscal_year
-                    else f"Quarter ending {end_date.isoformat()}"
-                )
+                # SEC `fy` can reflect later comparative filing metadata.
+                label = self._quarter_label(end_date, fiscal_period)
 
             accession = str(fact.get("accn", "unknown"))
             source_id = f"SEC:{ticker}:{accession}:{concept}"

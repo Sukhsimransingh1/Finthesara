@@ -108,3 +108,29 @@ def test_financial_analyst_does_not_invent_company() -> None:
 
     assert isinstance(agent_results, list)
     assert agent_results[0].status.value == "failed"
+
+def test_fiscal_year_date_range_is_not_split_at_calendar_year() -> None:
+    state = make_state()
+    state["time_range_start"] = "2023-10-01"
+    state["time_range_end"] = "2024-09-30"
+
+    periods = FinancialAnalystAgent._periods_from_state(state)
+
+    assert len(periods) == 1
+    assert periods[0].start_date.isoformat() == "2023-10-01"
+    assert periods[0].end_date.isoformat() == "2024-09-30"
+
+
+def test_annual_and_quarterly_dates_are_not_compared_as_a_trend() -> None:
+    state = make_state()
+    # The fake source returns values for each requested period. A single
+    # fiscal-year interval must remain one period, so no trend calculation
+    # can be generated from that single observation.
+    state["time_range_start"] = "2023-10-01"
+    state["time_range_end"] = "2024-09-30"
+    agent = FinancialAnalystAgent(data_source=FakeFinancialDataSource())
+
+    result = agent.run(state)
+    financial_results = result["financial_results"]
+    assert isinstance(financial_results, list)
+    assert financial_results[0]["calculations"] == []

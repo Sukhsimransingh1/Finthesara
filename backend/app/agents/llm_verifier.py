@@ -43,7 +43,7 @@ Calculations:
     indent=2,
 )}
 
-Evidence:
+Retrieved document evidence:
 {json.dumps(
     [
         {
@@ -58,6 +58,24 @@ Evidence:
     default=str,
     indent=2,
 )}
+
+Structured financial source evidence (SEC XBRL facts):
+{json.dumps(
+    state.get("financial_evidence", []),
+    default=str,
+    indent=2,
+)}
+
+Verification rules:
+- Treat a structured SEC fact as source-backed only when it includes a source_id,
+  source_url, metric, value, and reporting-period dates.
+- Check whether the financial result agrees with its structured source fact.
+- Do not claim you independently fetched or opened a source URL unless a tool did so.
+- If source-backed facts are present, do not mark them unsupported merely because
+  no uploaded-document/RAG chunks were retrieved.
+- Do not claim an arithmetic calculation is verified unless its inputs are present
+  and the formula is checked.
+- Distinguish source-backed reported facts from interpretation.
 
 Existing contradictions:
 {json.dumps(

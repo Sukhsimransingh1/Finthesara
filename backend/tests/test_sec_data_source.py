@@ -96,3 +96,19 @@ def test_financial_query_schema_remains_compatible() -> None:
 
     assert query.company == "AAPL"
     assert query.metric == MetricType.REVENUE
+
+
+def test_quarter_label_uses_reported_period_not_later_filing_metadata() -> None:
+    # Apple's FY2024 Q1 ended on 2023-12-30, although SEC comparative
+    # facts may carry later filing-year metadata.
+    assert SECFinancialDataSource._quarter_label(
+        date(2023, 12, 30),
+        "Q1",
+    ) == "Q1 FY2024"
+
+
+def test_quarter_label_calendar_year_quarter() -> None:
+    assert SECFinancialDataSource._quarter_label(
+        date(2025, 3, 31),
+        "Q1",
+    ) == "Q1 FY2025"

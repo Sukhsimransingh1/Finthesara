@@ -35,6 +35,11 @@ class ResearchState(TypedDict, total=False):
     ]
 
     financial_results: list[dict[str, object]]
+    financial_evidence: Annotated[
+        list[dict[str, object]],
+        operator.add,
+    ]
+
 
     research_output: dict[str, object] | None
 

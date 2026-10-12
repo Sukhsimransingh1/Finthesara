@@ -96,6 +96,7 @@ class FinancialAnalystAgent:
             }
 
         financial_results: list[dict[str, object]] = []
+        financial_evidence: list[dict[str, object]] = []
         calculations: list[dict[str, object]] = []
 
         for company in companies:
@@ -104,7 +105,13 @@ class FinancialAnalystAgent:
                 state=state,
             )
 
-            financial_results.append(result.model_dump())
+            result_data = result.model_dump()
+            financial_results.append(result_data)
+            financial_evidence.extend(
+                item
+                for item in result_data.get("financial_evidence", [])
+                if isinstance(item, dict)
+            )
             calculations.extend(result.calculations)
 
         agent_result = AgentResult(
@@ -122,6 +129,7 @@ class FinancialAnalystAgent:
 
         return {
             "financial_results": financial_results,
+            "financial_evidence": financial_evidence,
             "calculations": calculations,
             "agent_results": [agent_result],
         }
@@ -136,6 +144,7 @@ class FinancialAnalystAgent:
         calculations: list[dict[str, Any]] = []
         anomalies: list[str] = []
         source_ids: list[str] = []
+        financial_evidence: list[dict[str, Any]] = []
 
         metrics = self._required_metrics(state)
         periods = self._periods_from_state(state)
@@ -174,9 +183,38 @@ class FinancialAnalystAgent:
                     f"{value.period.end_date}). "
                     f"Source: {source}"
                 )
+                if value.source_id and value.source_url:
+                    financial_evidence.append(
+                        {
+                            "evidence_id": f"financial:{value.source_id}",
+                            "evidence_type": "sec_xbrl_fact",
+                            "company": value.company,
+                            "metric": metric.value,
+                            "value": str(value.value),
+                            "unit": value.unit,
+                            "currency": value.currency,
+                            "period_label": value.period.label,
+                            "period_start": value.period.start_date.isoformat(),
+                            "period_end": value.period.end_date.isoformat(),
+                            "source_id": value.source_id,
+                            "source_url": value.source_url,
+                            "statement": findings[-1],
+                        }
+                    )
 
+            durations = [
+                (value.period.end_date - value.period.start_date).days
+                for value in values
+            ]
+            comparable_periods = (
+                len(values) >= 2
+                and max(durations) - min(durations) <= 35
+            )
 
-            if metric == MetricType.REVENUE and len(values) >= 2:
+            if (
+                metric == MetricType.REVENUE
+                and comparable_periods
+            ):
                 revenue_result = self.analysis_tools.analyze_revenue(
                     RevenueAnalysisInput(
                         company=company,
@@ -196,7 +234,7 @@ class FinancialAnalystAgent:
 
             elif (
                 metric == MetricType.OPERATING_EXPENSE
-                and len(values) >= 2
+                and comparable_periods
             ):
                 expense_result = self.analysis_tools.analyze_expense_trend(
                     ExpenseTrendInput(
@@ -226,6 +264,7 @@ class FinancialAnalystAgent:
             calculations=calculations,
             anomalies=anomalies,
             source_ids=source_ids,
+            financial_evidence=financial_evidence,
         )
 
     @staticmethod
@@ -282,6 +321,20 @@ class FinancialAnalystAgent:
             raise ValueError(
                 "time_range_start cannot be after time_range_end."
             )
+
+        total_days = (end_date - start_date).days + 1
+
+        # Keep a single fiscal-year request intact (e.g. Apple's FY2024:
+        # 2023-10-01 through 2024-09-30). Splitting it at Jan 1 can mix
+        # a quarter with an annual fact.
+        if 250 <= total_days <= 400:
+            return [
+                FinancialPeriod(
+                    label=f"{start_date.year}-{end_date.year}",
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            ]
 
         periods: list[FinancialPeriod] = []
 

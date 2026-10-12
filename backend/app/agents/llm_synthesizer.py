@@ -36,6 +36,13 @@ Calculations:
     indent=2,
 )}
 
+Structured financial source evidence (SEC XBRL facts):
+{json.dumps(
+    state.get("financial_evidence", []),
+    default=str,
+    indent=2,
+)}
+
 Retrieved evidence:
 {json.dumps(
     [

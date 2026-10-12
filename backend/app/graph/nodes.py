@@ -290,6 +290,44 @@ def _deterministic_synthesis(
                 ),
             ]
         )
+        for financial_result in financial_results:
+            company = financial_result.get("company", "Unknown company")
+            report_sections.extend(["", f"### {company}"])
+            findings = financial_result.get("findings", [])
+            if isinstance(findings, list) and findings:
+                report_sections.extend(
+                    f"- {finding}"
+                    for finding in findings
+                    if isinstance(finding, str)
+                )
+            else:
+                report_sections.append(
+                    "No financial findings were returned for this company."
+                )
+
+    financial_evidence = list(state.get("financial_evidence", []))
+    if financial_evidence:
+        report_sections.extend(
+            [
+                "",
+                "## Financial Source Evidence",
+                "Reported figures below include source identifiers and SEC filing links.",
+            ]
+        )
+        for item in financial_evidence:
+            if not isinstance(item, dict):
+                continue
+            report_sections.append(
+                "- "
+                f"{item.get('company', 'Unknown company')} — "
+                f"{item.get('metric', 'metric')}: "
+                f"{item.get('value', 'unknown')} "
+                f"{item.get('unit') or item.get('currency') or ''}; "
+                f"{item.get('period_label', 'period unspecified')} "
+                f"({item.get('period_start', '?')} to {item.get('period_end', '?')}). "
+                f"Source ID: {item.get('source_id', 'unavailable')}. "
+                f"Source: {item.get('source_url', 'unavailable')}"
+            )
 
     if evidence:
         report_sections.extend(

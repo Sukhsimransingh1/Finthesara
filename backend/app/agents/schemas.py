@@ -152,6 +152,7 @@ class FinancialAnalystOutput(BaseModel):
     calculations: list[dict[str, Any]] = Field(default_factory=list)
     anomalies: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
+    financial_evidence: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ResearchAgentOutput(BaseModel):
