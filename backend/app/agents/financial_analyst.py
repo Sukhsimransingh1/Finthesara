@@ -296,23 +296,27 @@ class FinancialAnalystAgent:
             MetricType.OPERATING_EXPENSE,
         ]
 
+    
     @staticmethod
     def _periods_from_state(
         state: ResearchState,
     ) -> list[FinancialPeriod]:
+        plan = state.get("research_plan")
+
         start_value = state.get("time_range_start")
         end_value = state.get("time_range_end")
 
-        if start_value is None or end_value is None:
-            today = date.today()
+        # The planner stores the authoritative dates in the plan.
+        if plan is not None:
+            if start_value is None and plan.start_date is not None:
+                start_value = plan.start_date.isoformat()
+            if end_value is None and plan.end_date is not None:
+                end_value = plan.end_date.isoformat()
 
-            return [
-                FinancialPeriod(
-                    label=str(today.year),
-                    start_date=date(today.year, 1, 1),
-                    end_date=today,
-                )
-            ]
+        if start_value is None or end_value is None:
+            raise ValueError(
+                "Financial analysis requires explicit start and end dates."
+            )
 
         start_date = date.fromisoformat(start_value)
         end_date = date.fromisoformat(end_value)
@@ -322,32 +326,20 @@ class FinancialAnalystAgent:
                 "time_range_start cannot be after time_range_end."
             )
 
-        total_days = (end_date - start_date).days + 1
-
-        # Keep a single fiscal-year request intact (e.g. Apple's FY2024:
-        # 2023-10-01 through 2024-09-30). Splitting it at Jan 1 can mix
-        # a quarter with an annual fact.
-        if 250 <= total_days <= 400:
+        # Keep fiscal-year requests intact; do not split at January 1.
+        if 250 <= (end_date - start_date).days <= 400:
             return [
                 FinancialPeriod(
-                    label=f"{start_date.year}-{end_date.year}",
+                    label=f"FY{end_date.year}",
                     start_date=start_date,
                     end_date=end_date,
                 )
             ]
 
         periods: list[FinancialPeriod] = []
-
         for year in range(start_date.year, end_date.year + 1):
-            period_start = max(
-                start_date,
-                date(year, 1, 1),
-            )
-
-            period_end = min(
-                end_date,
-                date(year, 12, 31),
-            )
+            period_start = max(start_date, date(year, 1, 1))
+            period_end = min(end_date, date(year, 12, 31))
 
             if period_start <= period_end:
                 periods.append(

@@ -35,7 +35,9 @@ Supported task types:
 - document_research
 - external_research
 - verification
-
+- Never use "synthesis" as a research task type.
+- Synthesis is performed by a separate workflow node after research and verification.
+- Use only the four supported task types listed above.
 IMPORTANT:
 - Do not use alternative top-level fields such as financial_metrics,
   time_period, or research_tasks.

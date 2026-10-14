@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.agents.state import ResearchState
 from app.graph.workflow import (
@@ -41,7 +41,7 @@ class ResearchRunner:
         run_id: str | None = None,
     ) -> ResearchState:
         state: ResearchState = {
-            "run_id": run_id or "",
+            "run_id": run_id or str(uuid4()),
             "user_id": user_id,
             "project_id": project_id,
             "original_question": question,

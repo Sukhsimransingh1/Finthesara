@@ -136,3 +136,53 @@ async def upload_document(
             temp_path.unlink(missing_ok=True)
 
         await file.close()
+@router.get("")
+def list_documents(
+    project_id: UUID,
+    user_id: CurrentUser,
+    limit: int = 50,
+) -> dict[str, object]:
+    """List persisted documents for an owned project."""
+    if limit < 1 or limit > 100:
+        raise HTTPException(
+            status_code=422,
+            detail="limit must be between 1 and 100.",
+        )
+
+    try:
+        repository = ResearchRepository()
+        repository.assert_project_owner(project_id, user_id)
+
+        response = (
+            repository.client
+            .table("documents")
+            .select(
+                "id,project_id,title,company,document_type,"
+                "publication_date,source_url,status,metadata,"
+                "created_at"
+            )
+            .eq("project_id", str(project_id))
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+
+        rows = response.data or []
+
+        return {
+            "items": rows,
+            "count": len(rows),
+        }
+
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found or access denied.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Document listing is temporarily unavailable.",
+        ) from exc

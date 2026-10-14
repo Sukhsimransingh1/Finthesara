@@ -17,108 +17,125 @@ import {
 } from "lucide-react";
 import {
   api,
-  streamResearch,
   storeRunResult,
   DEFAULT_PROJECT_ID,
   type ResearchResponse,
-  type StreamEvent,
 } from "@/lib/api";
 import { Heading, Panel } from "@/components/ui";
 
 const STAGES = [
-  { id: "planner", label: "Planning", I: GitBranch },
-  { id: "financial_analysis", label: "Financial analysis", I: BarChart3 },
-  { id: "research", label: "Retrieval", I: Search },
-  { id: "evidence_fusion", label: "Evidence fusion", I: ShieldCheck },
-  { id: "verification", label: "Verification", I: CheckCircle2 },
-  { id: "synthesis", label: "Synthesis", I: FileText },
+  { label: "Planning", I: GitBranch },
+  { label: "Financial analysis", I: BarChart3 },
+  { label: "Retrieval", I: Search },
+  { label: "Evidence fusion", I: ShieldCheck },
+  { label: "Verification", I: CheckCircle2 },
+  { label: "Synthesis", I: FileText },
 ] as const;
 
 export default function NewResearch() {
   const [q, setQ] = useState("");
   const [entity, setEntity] = useState("");
-  const [focus, setFocus] = useState("financial fundamentals");
-  const [period, setPeriod] = useState("latest available");
+  const [focus, setFocus] = useState(
+    "financial fundamentals",
+  );
+  const [period, setPeriod] = useState(
+    "latest available",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [activeStage, setActiveStage] = useState<string | null>(null);
-  const [completed, setCompleted] = useState<string[]>([]);
-  const [log, setLog] = useState<string[]>([]);
-  const router = useRouter();
+  const [message, setMessage] = useState("");
+
   const abortRef = useRef<AbortController | null>(null);
-
-  function appendLog(line: string) {
-    setLog((prev) => [...prev.slice(-40), line]);
-  }
-
-  function onEvent(evt: StreamEvent) {
-    if (evt.node) {
-      setActiveStage(evt.node);
-      setCompleted((prev) =>
-        prev.includes(evt.node!) ? prev : [...prev, evt.node!],
-      );
-    }
-    if (evt.event === "research_started") {
-      appendLog("Research workflow started.");
-    } else if (evt.event === "research_completed") {
-      appendLog("Research workflow completed.");
-    } else if (evt.event === "research_error") {
-      appendLog(`Error: ${String(evt.data?.error || "unknown")}`);
-    } else if (evt.event === "node_update") {
-      appendLog(`Node "${evt.node}" updated.`);
-    }
-  }
+  const router = useRouter();
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+
     if (busy) return;
-    setBusy(true);
+
     setError("");
-    setCompleted([]);
-    setActiveStage(null);
-    setLog([]);
+    setMessage("");
+
+    if (!DEFAULT_PROJECT_ID) {
+      setError(
+        "NEXT_PUBLIC_PROJECT_ID is missing. Add the UUID of a project owned by your Supabase user to frontend/.env.local, then restart Next.js.",
+      );
+      return;
+    }
+
+    const uuidPattern =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    if (!uuidPattern.test(DEFAULT_PROJECT_ID)) {
+      setError(
+        "NEXT_PUBLIC_PROJECT_ID must be a valid project UUID, not your Supabase project reference or URL.",
+      );
+      return;
+    }
+
+    setBusy(true);
+
+    setMessage(
+      "Submitting one research request. The current backend runs this workflow synchronously; live node updates are not exposed by this endpoint.",
+    );
 
     const question = [
       q.trim(),
-      entity.trim() ? `Company/entity: ${entity.trim()}` : "",
+      entity.trim()
+        ? `Company/entity: ${entity.trim()}`
+        : "",
       `Research focus: ${focus}`,
       `Reporting period: ${period}`,
     ]
       .filter(Boolean)
       .join("\n");
 
-    abortRef.current = new AbortController();
+    const runId = crypto.randomUUID();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
-      try {
-        await streamResearch(
-          { question, project_id: DEFAULT_PROJECT_ID },
-          onEvent,
-          abortRef.current.signal,
-        );
-      } catch (streamErr) {
-        appendLog(
-          `Stream ended: ${streamErr instanceof Error ? streamErr.message : "unknown"}`,
+      const result = await api<ResearchResponse>(
+        "/research",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            question,
+            project_id: DEFAULT_PROJECT_ID,
+            run_id: runId,
+          }),
+          signal: controller.signal,
+        },
+      );
+
+      const normalized = {
+        ...result,
+        run_id: result.run_id || runId,
+      };
+
+      storeRunResult(normalized);
+
+      if (!normalized.run_id) {
+        throw new Error(
+          "The backend returned no run ID, so this result cannot be opened.",
         );
       }
 
-      const result = await api<ResearchResponse>("/research", {
-        method: "POST",
-        body: JSON.stringify({ question, project_id: DEFAULT_PROJECT_ID }),
-      });
-      storeRunResult(result);
-
-      const id = result.run_id;
-      if (id) {
-        router.push(`/research/${id}`);
+      router.push(
+        `/research/${encodeURIComponent(normalized.run_id)}`,
+      );
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") {
+        setError(
+          "Request cancelled. The backend may already have started processing; check research history before retrying.",
+        );
       } else {
         setError(
-          "The API responded, but no run identifier was present: " +
-            JSON.stringify(result),
+          e instanceof Error
+            ? e.message
+            : "Research request failed.",
         );
       }
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Request failed");
     } finally {
       setBusy(false);
       abortRef.current = null;
@@ -127,8 +144,6 @@ export default function NewResearch() {
 
   function cancel() {
     abortRef.current?.abort();
-    setBusy(false);
-    setActiveStage(null);
   }
 
   return (
@@ -136,7 +151,7 @@ export default function NewResearch() {
       <Heading
         eyebrow="WORKSPACE / NEW RUN"
         title="Start an investigation"
-        description="Describe the question. Your backend handles retrieval, financial analysis, and verification."
+        description="Describe the question. The backend handles retrieval, financial analysis, and verification."
       />
 
       <div className="research-layout">
@@ -144,7 +159,10 @@ export default function NewResearch() {
           title="Investigation brief"
           description="Specify the entity, scope, and reporting period."
         >
-          <form className="research-form" onSubmit={submit}>
+          <form
+            className="research-form"
+            onSubmit={submit}
+          >
             <label>
               Research question <em>REQUIRED</em>
               <textarea
@@ -183,6 +201,7 @@ export default function NewResearch() {
                   <option>general research</option>
                 </select>
               </label>
+
               <label>
                 Reporting period
                 <select
@@ -198,6 +217,13 @@ export default function NewResearch() {
               </label>
             </div>
 
+            {message && (
+              <div className="notice">
+                <InfoIcon />
+                <span>{message}</span>
+              </div>
+            )}
+
             {error && (
               <div className="error-box">
                 <b>Investigation failed</b>
@@ -205,35 +231,49 @@ export default function NewResearch() {
               </div>
             )}
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+              }}
+            >
               <button
                 className="btn primary large"
                 disabled={busy || q.trim().length < 8}
               >
                 {busy ? (
                   <>
-                    <LoaderCircle className="spin" size={16} /> Running…
+                    <LoaderCircle
+                      className="spin"
+                      size={16}
+                    />
+                    Running…
                   </>
                 ) : (
                   <>
-                    Launch investigation <ArrowRight size={16} />
+                    Launch investigation
+                    <ArrowRight size={16} />
                   </>
                 )}
               </button>
+
               {busy && (
                 <button
                   type="button"
                   className="btn secondary large"
                   onClick={cancel}
                 >
-                  <X size={16} /> Cancel
+                  <X size={16} />
+                  Cancel request
                 </button>
               )}
             </div>
 
             <small className="form-foot">
-              <ShieldCheck size={14} /> Findings remain traceable to sources and
-              may require human review.
+              <ShieldCheck size={14} />
+              Findings should be traceable to sources and may
+              require human review.
             </small>
           </form>
         </Panel>
@@ -243,55 +283,58 @@ export default function NewResearch() {
             <span className="feature-icon">
               <Sparkles size={18} />
             </span>
-            <h3>What happens next?</h3>
-            {STAGES.map((s, i) => {
-              const isDone = completed.includes(s.id);
-              const isActive = activeStage === s.id;
-              return (
-                <div className="step" key={s.id}>
-                  <span>0{i + 1}</span>
-                  <b style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <s.I
-                      size={14}
-                      style={{
-                        color: isDone
-                          ? "var(--teal)"
-                          : isActive
-                            ? "var(--teal)"
-                            : "var(--muted)",
-                      }}
-                    />
-                    {s.label}
-                  </b>
-                </div>
-              );
-            })}
-          </div>
 
-          {busy && (
-            <div className="aside-card">
-              <h3>Execution log</h3>
-              <pre
-                className="json"
-                style={{ maxHeight: 220, margin: 0, fontSize: 10 }}
-              >
-                {log.join("\n") || "Waiting for events…"}
-              </pre>
-            </div>
-          )}
+            <h3>Research workflow</h3>
+
+            {STAGES.map((stage, i) => (
+              <div className="step" key={stage.label}>
+                <span>0{i + 1}</span>
+                <b
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <stage.I
+                    size={14}
+                    style={{ color: "var(--teal)" }}
+                  />
+                  {stage.label}
+                </b>
+              </div>
+            ))}
+
+            <p
+              className="muted"
+              style={{ marginTop: 12 }}
+            >
+              These are workflow stages, not live progress
+              indicators. Live node events require the backend
+              streaming endpoint to return a single complete
+              result.
+            </p>
+          </div>
 
           <div className="aside-card">
             <h3>Research principles</h3>
             <p>
-              Source-grounded results, transparent limitations, and explicit
-              review states. This workspace is not investment advice.
+              Source-grounded results, transparent limitations,
+              and explicit review states. This workspace is not
+              investment advice.
             </p>
+
             <Link className="table-link" href="/research">
-              View research history <ArrowRight size={13} />
+              View research history
+              <ArrowRight size={13} />
             </Link>
           </div>
         </aside>
       </div>
     </>
   );
+}
+
+function InfoIcon() {
+  return <ShieldCheck size={17} aria-hidden="true" />;
 }

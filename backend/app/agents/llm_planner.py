@@ -65,15 +65,25 @@ Do not invent financial facts.
                     "LLM returned a start date after the end date."
                 )
 
+        
         tasks: list[ResearchTask] = []
 
         for task in parsed.tasks:
+            raw_task_type = task.task_type.strip().lower()
+
+            # Synthesis is handled by a separate workflow node.
+            if raw_task_type == "synthesis":
+                continue
+
             try:
-                task_type = ResearchTaskType(task.task_type)
+                task_type = ResearchTaskType(raw_task_type)
             except ValueError as exc:
+                supported = ", ".join(
+                    item.value for item in ResearchTaskType
+                )
                 raise ValueError(
                     "LLM returned unsupported research task type: "
-                    f"{task.task_type}"
+                    f"{task.task_type}. Supported types: {supported}"
                 ) from exc
 
             tasks.append(
