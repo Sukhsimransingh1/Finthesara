@@ -90,7 +90,7 @@ export default function PublicDemoPage() {
         >
           <Link href="/">Home</Link>
           <Link href="/login" className="btn secondary">
-            Sign in
+            
           </Link>
         </div>
       </header>

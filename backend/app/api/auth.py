@@ -1,46 +1,32 @@
 
+"""Local single-user identity for development without login."""
+
 from __future__ import annotations
 
-from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import HTTPException, status
 
-from app.db.supabase_client import get_supabase_client
-
-_bearer = HTTPBearer(auto_error=False)
+from app.config import get_settings
 
 
-def get_current_user_id(
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None,
-        Depends(_bearer),
-    ],
-) -> UUID:
-    """Validate a Supabase access token and return its user UUID."""
-    if credentials is None or credentials.scheme.lower() != "bearer":
+def get_current_user_id() -> UUID:
+    """Return the configured local owner ID without requiring a token."""
+    raw_user_id = get_settings().local_user_id.strip()
+
+    if not raw_user_id:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="A valid Supabase access token is required.",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Local mode is not configured. Set LOCAL_USER_ID "
+                "in the backend .env file."
+            ),
         )
 
     try:
-        response = get_supabase_client().auth.get_user(
-            credentials.credentials
-        )
-        user = getattr(response, "user", None)
-        user_id = getattr(user, "id", None)
-
-        if not user_id:
-            raise ValueError("No user in auth response")
-
-        return UUID(str(user_id))
-
-    except Exception as exc:
+        return UUID(raw_user_id)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired access token.",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LOCAL_USER_ID must be a valid UUID.",
         ) from exc

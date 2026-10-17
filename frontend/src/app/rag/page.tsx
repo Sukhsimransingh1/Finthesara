@@ -1,91 +1,331 @@
 "use client";
 
-import { useState } from "react";
-import { Search, LoaderCircle, AlertCircle } from "lucide-react";
+import { FormEvent, useEffect, useState } from "react";
+import {
+  Search,
+  LoaderCircle,
+  FileText,
+  ExternalLink,
+  RefreshCw,
+} from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+import { api } from "@/lib/api";
+import { useProjects } from "@/components/projects/ProjectProvider";
 import { Heading, Panel, Empty, ErrorBox } from "@/components/ui";
 
+interface Evidence {
+  id?: string;
+  document_id?: string;
+  document_title?: string;
+  title?: string;
+  source?: string;
+  source_url?: string;
+  url?: string;
+  content?: string;
+  text?: string;
+  snippet?: string;
+  score?: number;
+  metadata?: Record<string, unknown>;
+}
+
+interface RagResponse {
+  query?: string;
+  project_id?: string;
+  answer?: string;
+  result?: string;
+  response?: string;
+  evidence?: Evidence[];
+  sources?: Evidence[];
+  results?: Evidence[];
+  result_count?: number;
+  retrieval_config?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+function getAnswer(data: RagResponse): string {
+  for (const value of [data.answer, data.result, data.response]) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function getEvidence(data: RagResponse): Evidence[] {
+  for (const value of [data.evidence, data.sources, data.results]) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+
+  return [];
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "The research query could not be completed.";
+}
+
 export default function Rag() {
-  const [q, setQ] = useState("");
-  const [err, setErr] = useState("");
+  const {
+    selectedProjectId,
+    selectedProject,
+    loading: projectsLoading,
+  } = useProjects();
+
+  const [query, setQuery] = useState("");
+  const [result, setResult] = useState<RagResponse | null>(null);
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function ask(e: React.FormEvent) {
-    e.preventDefault();
+  useEffect(() => {
+    setResult(null);
+    setError("");
+  }, [selectedProjectId]);
+
+  async function ask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const cleanQuery = query.trim();
+
+    if (!selectedProjectId) {
+      setError("Select a project before querying the knowledge base.");
+      return;
+    }
+
+    if (!cleanQuery) {
+      setError("Enter a question first.");
+      return;
+    }
+
     setBusy(true);
-    setErr("");
+    setError("");
+    setResult(null);
+
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000"}${
-          process.env.NEXT_PUBLIC_API_PREFIX || "/api/v1"
-        }/rag/query`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: q }),
-        },
-      );
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(
-          `RAG query endpoint returned ${res.status}. ${text}`,
-        );
-      }
-      const data = await res.json();
-      setErr(JSON.stringify(data, null, 2));
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Request failed");
+      const data = await api<RagResponse>("/rag/query", {
+        method: "POST",
+        body: JSON.stringify({
+          query: cleanQuery,
+          project_id: selectedProjectId,
+          top_k: 10,
+        }),
+      });
+
+      setResult(data);
+    } catch (err) {
+      setError(getErrorMessage(err));
     } finally {
       setBusy(false);
     }
   }
+
+  const answer = result ? getAnswer(result) : "";
+  const evidence = result ? getEvidence(result) : [];
 
   return (
     <>
       <Heading
         eyebrow="INTELLIGENCE / RETRIEVAL"
         title="Research copilot"
-        description="Query the connected knowledge base and inspect retrieved context."
+        description="Ask questions about your indexed financial documents and inspect the supporting evidence."
       />
 
-      <Panel title="Ask the knowledge base">
+      <Panel
+        title="Ask the knowledge base"
+        description={
+          selectedProject
+            ? `Searching within ${selectedProject.name}.`
+            : "Select a project from the sidebar to begin."
+        }
+      >
         <form className="query-form" onSubmit={ask}>
           <textarea
             required
-            rows={3}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Ask about a filing, a disclosed risk, a financial metric, or a source document…"
+            rows={4}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Ask about revenue growth, disclosed risks, financial metrics, or a source document..."
+            disabled={busy || projectsLoading || !selectedProjectId}
+            aria-label="Research question"
           />
+
           <button
             className="btn primary"
-            disabled={busy || !q.trim()}
             type="submit"
+            disabled={
+              busy ||
+              projectsLoading ||
+              !selectedProjectId ||
+              !query.trim()
+            }
           >
             {busy ? (
               <LoaderCircle size={15} className="spin" />
             ) : (
               <Search size={15} />
-            )}{" "}
-            Search sources
+            )}
+            {busy ? "Researching..." : "Search sources"}
           </button>
         </form>
-        {err && <ErrorBox message={err} />}
+
+        {projectsLoading && (
+          <p className="muted">Loading projects...</p>
+        )}
+
+        {!projectsLoading && !selectedProjectId && (
+          <p className="muted">
+            No active project is selected. Create or select a project in the
+            sidebar.
+          </p>
+        )}
+
+        {error && <ErrorBox message={error} />}
       </Panel>
 
-      <Panel title="Response">
-        <Empty
-          title="RAG query endpoint not available"
-          description="The backend does not currently expose a POST /api/v1/rag/query endpoint. Retrieval is performed internally by the multi-agent research workflow. Submit a query above to confirm availability."
-        />
-      </Panel>
+      {result && (
+        <>
+          <Panel
+            title="Research answer"
+            description="Generated from the response returned by your backend."
+          >
+            {answer ? (
+              <div className="markdown-content">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    a: ({ children, href, ...props }) => (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        {...props}
+                      >
+                        {children}
+                      </a>
+                    ),
+                  }}
+                >
+                  {answer}
+                </ReactMarkdown>
+              </div>
+            ) : (
+              <>
+                <Empty
+                  title="No text answer returned"
+                  description="The API returned a response, but no answer, result, or response text field was found."
+                />
+                <details>
+                  <summary>Inspect complete API response</summary>
+                  <pre className="json">
+                    {JSON.stringify(result, null, 2)}
+                  </pre>
+                </details>
+              </>
+            )}
+          </Panel>
 
-      <div className="notice">
-        <AlertCircle size={17} />
-        <span>
-          <b>Evidence-first retrieval.</b> The hybrid RAG pipeline (sparse +
-          vector search with RRF) runs as part of the research workflow. A
-          standalone RAG query endpoint is not yet exposed by the backend.
-        </span>
+          <Panel
+            title="Supporting evidence"
+            description={`${evidence.length} evidence item(s) returned by the API.`}
+          >
+            {evidence.length === 0 ? (
+              <Empty
+                title="No evidence items returned"
+                description="The backend did not include a recognized evidence, sources, or results array for this query."
+              />
+            ) : (
+              <div className="evidence-list">
+                {evidence.map((item, index) => {
+                  const title =
+                    item.document_title ||
+                    item.title ||
+                    item.source ||
+                    `Evidence ${index + 1}`;
+
+                  const passage =
+                    item.content || item.text || item.snippet || "";
+
+                  const sourceUrl = item.source_url || item.url;
+
+                  return (
+                    <article
+                      className="evidence-item"
+                      key={`${item.id || item.document_id || title}-${index}`}
+                    >
+                      <div className="evidence-item-heading">
+                        <FileText size={17} />
+                        <b>{title}</b>
+                      </div>
+
+                      {passage && <p>{passage}</p>}
+
+                      {typeof item.score === "number" && (
+                        <small>
+                          Retrieval score: {item.score.toFixed(4)}
+                        </small>
+                      )}
+
+                      {sourceUrl && (
+                        <a
+                          href={sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          View source <ExternalLink size={13} />
+                        </a>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+
+          <details className="response-details">
+            <summary>Inspect complete API response</summary>
+            <pre className="json">
+              {JSON.stringify(result, null, 2)}
+            </pre>
+          </details>
+        </>
+      )}
+
+      {!result && !busy && (
+        <Panel title="Response">
+          <Empty
+            title="No query submitted"
+            description="Submit a question to see the generated answer and any supporting evidence returned by the backend."
+          />
+        </Panel>
+      )}
+
+      {busy && (
+        <Panel title="Research in progress">
+          <p className="muted">
+            Retrieving relevant passages and generating an answer...
+          </p>
+        </Panel>
+      )}
+
+      <div className="rag-refresh">
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={() => {
+            setQuery("");
+            setResult(null);
+            setError("");
+          }}
+          disabled={busy}
+        >
+          <RefreshCw size={14} />
+          Clear query
+        </button>
       </div>
     </>
   );

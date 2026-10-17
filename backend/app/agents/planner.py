@@ -1,5 +1,7 @@
+
 from __future__ import annotations
 
+from datetime import date
 from uuid import uuid4
 
 from app.agents.schemas import (
@@ -29,8 +31,33 @@ class ResearchPlannerAgent:
         if not question:
             raise ValueError("Research question cannot be empty.")
 
-        plan = self._build_initial_plan(question)
+        initial_plan = self._build_initial_plan(question)
 
+        # Use the last five completed calendar years as the default range.
+        # For example, in 2026 this resolves to 2021-01-01 through 2025-12-31.
+        today = date.today()
+        latest_completed_year = today.year - 1
+        start_date = date(latest_completed_year - 4, 1, 1)
+        end_date = date(latest_completed_year, 12, 31)
+
+        # Propagate the date range to the plan and every research task.
+        plan = initial_plan.model_copy(
+            update={
+                "start_date": start_date,
+                "end_date": end_date,
+                "tasks": [
+                    task.model_copy(
+                        update={
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        }
+                    )
+                    for task in initial_plan.tasks
+                ],
+            }
+        )
+
+        # Preserve companies identified earlier in the workflow.
         existing_companies = list(state.get("companies", []))
 
         if existing_companies:
@@ -48,6 +75,8 @@ class ResearchPlannerAgent:
                 "task_count": len(plan.tasks),
                 "companies": plan.companies,
                 "required_metrics": plan.required_metrics,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
             },
         )
 

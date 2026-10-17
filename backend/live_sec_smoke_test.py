@@ -21,7 +21,6 @@ if str(BACKEND) not in sys.path:
 from app.tools.schemas import FinancialDataQuery, FinancialPeriod, MetricType  # noqa: E402
 from app.tools.sec_data_source import SECFinancialDataSource  # noqa: E402
 
-
 FY2024 = FinancialPeriod(
     label="FY2024",
     start_date=date(2023, 10, 1),

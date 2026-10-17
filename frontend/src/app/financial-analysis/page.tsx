@@ -1,104 +1,431 @@
+
 "use client";
 
-import { useState } from "react";
-import { BarChart3, LoaderCircle, AlertCircle } from "lucide-react";
+import { FormEvent, useMemo, useState } from "react";
+import {
+  BarChart3,
+  LoaderCircle,
+  Info,
+  ExternalLink,
+  FileText,
+  ChevronDown,
+} from "lucide-react";
+
+import { api } from "@/lib/api";
 import { Heading, Panel, Empty, ErrorBox } from "@/components/ui";
+
+type JsonRecord = Record<string, unknown>;
+
+interface FinancialValue {
+  company?: string;
+  metric?: string;
+  period?: {
+    label?: string;
+    start_date?: string;
+    end_date?: string;
+  };
+  value?: number | string;
+  currency?: string | null;
+  unit?: string | null;
+  source_id?: string | null;
+  source_url?: string | null;
+}
+
+interface MetricGroup {
+  company?: string;
+  metric?: string;
+  values?: FinancialValue[];
+  source_count?: number;
+}
+
+interface FinancialAnalysisResponse extends JsonRecord {
+  company?: string;
+  ticker?: string;
+  period?: string;
+  metrics?: MetricGroup[];
+  results?: unknown[];
+  financial_results?: unknown[];
+}
+
+interface MetricCard {
+  company: string;
+  metric: string;
+  period: string;
+  value: number;
+  currency: string;
+  unit: string;
+  sourceId: string;
+  sourceUrl: string;
+}
+
+const METRIC_LABELS: Record<string, string> = {
+  revenue: "Revenue",
+  operating_expense: "Operating expenses",
+  operating_income: "Operating income",
+  net_income: "Net income",
+  gross_profit: "Gross profit",
+  eps: "Earnings per share",
+};
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function collectMetricGroups(response: unknown): MetricGroup[] {
+  if (!isRecord(response)) return [];
+
+  const groups: MetricGroup[] = [];
+  const visited = new Set<unknown>();
+
+  function visit(value: unknown, depth = 0) {
+    if (depth > 6 || !value || visited.has(value)) return;
+
+    if (typeof value === "object") visited.add(value);
+
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+      return;
+    }
+
+    if (!isRecord(value)) return;
+
+    if (
+      typeof value.metric === "string" &&
+      Array.isArray(value.values)
+    ) {
+      groups.push(value as unknown as MetricGroup);
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+      if (
+        ["values", "period", "metadata", "retrieval_config"].includes(key)
+      ) {
+        continue;
+      }
+      if (Array.isArray(child) || isRecord(child)) {
+        visit(child, depth + 1);
+      }
+    }
+  }
+
+  visit(response);
+  return groups;
+}
+
+function toMetricCards(response: unknown): MetricCard[] {
+  const groups = collectMetricGroups(response);
+  const cards: MetricCard[] = [];
+
+  for (const group of groups) {
+    for (const item of group.values ?? []) {
+      if (item.value === null || item.value === undefined || item.value === "") {
+        continue;
+      }
+
+      const numericValue = Number(item.value);
+      if (!Number.isFinite(numericValue)) continue;
+
+      cards.push({
+        company: item.company || group.company || "Company",
+        metric: item.metric || group.metric || "Financial metric",
+        period: item.period?.label || "Reported period",
+        value: numericValue,
+        currency: item.currency || "",
+        unit: item.unit || "",
+        sourceId: item.source_id || "",
+        sourceUrl: item.source_url || "",
+      });
+    }
+  }
+
+  return cards;
+}
+
+function labelMetric(metric: string): string {
+  return (
+    METRIC_LABELS[metric.toLowerCase()] ||
+    metric.replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+  );
+}
+
+function formatValue(card: MetricCard): string {
+  const metric = card.metric.toLowerCase();
+  const isPerShare = metric === "eps";
+  const isCurrency = Boolean(card.currency) || card.unit === "USD";
+
+  const formatted = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: isPerShare ? 4 : 2,
+  }).format(card.value);
+
+  if (isCurrency || isPerShare) {
+    const currencyCode = card.currency || (isPerShare ? "USD" : "");
+    if (currencyCode) {
+      try {
+        return new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: currencyCode,
+          maximumFractionDigits: isPerShare ? 4 : 2,
+        }).format(card.value);
+      } catch {
+        return `${currencyCode} ${formatted}`;
+      }
+    }
+  }
+
+  return card.unit ? `${formatted} ${card.unit}` : formatted;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "The financial analysis request failed.";
+}
+
+function getCompany(response: FinancialAnalysisResponse): string {
+  if (typeof response.company === "string") return response.company;
+
+  const cards = toMetricCards(response);
+  return cards[0]?.company || asString(response.ticker, "");
+}
 
 export default function FinancialAnalysis() {
   const [ticker, setTicker] = useState("AAPL");
   const [period, setPeriod] = useState("Latest");
-  const [err, setErr] = useState("");
+  const [data, setData] = useState<FinancialAnalysisResponse | null>(null);
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function go(e: React.FormEvent) {
-    e.preventDefault();
+  async function runAnalysis(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const normalizedTicker = ticker.trim().toUpperCase();
+
+    if (!normalizedTicker) {
+      setError("Enter a ticker symbol before running the analysis.");
+      return;
+    }
+
     setBusy(true);
-    setErr("");
+    setError("");
+    setData(null);
+
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000"}${
-          process.env.NEXT_PUBLIC_API_PREFIX || "/api/v1"
-        }/financial-analysis`,
+      const response = await api<FinancialAnalysisResponse>(
+        "/financial-analysis",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticker, period }),
+          body: JSON.stringify({
+            ticker: normalizedTicker,
+            period,
+          }),
         },
       );
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(
-          `Financial analysis endpoint returned ${res.status}. ${text}`,
-        );
-      }
-      const data = await res.json();
-      setErr(JSON.stringify(data, null, 2));
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Request failed");
+
+      setData(response);
+    } catch (err) {
+      setError(getErrorMessage(err));
     } finally {
       setBusy(false);
     }
   }
+
+  const cards = useMemo(() => toMetricCards(data), [data]);
+  const company = data ? getCompany(data) : "";
+  const sources = useMemo(() => {
+    const unique = new Map<string, MetricCard>();
+
+    for (const card of cards) {
+      if (card.sourceUrl) {
+        unique.set(card.sourceUrl, card);
+      }
+    }
+
+    return Array.from(unique.values());
+  }, [cards]);
 
   return (
     <>
       <Heading
         eyebrow="INTELLIGENCE / FUNDAMENTALS"
         title="Financial analysis"
-        description="Request structured analysis. Values are displayed only when returned by the API."
+        description="Explore reported company financials and deterministic calculations sourced from SEC filings."
       />
 
-      <Panel title="Analysis request">
-        <form className="inline-form" onSubmit={go}>
-          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12, fontWeight: 600 }}>
+      <Panel
+        title="Analysis request"
+        description="Enter a ticker symbol and choose the reporting period."
+      >
+        <form className="financial-request-form" onSubmit={runAnalysis}>
+          <label>
             Ticker
             <input
               required
               value={ticker}
-              onChange={(e) => setTicker(e.target.value.toUpperCase())}
+              onChange={(event) => setTicker(event.target.value.toUpperCase())}
+              placeholder="e.g. AAPL"
+              autoComplete="off"
               disabled={busy}
             />
+            <small>
+              Enter a ticker symbol. Company names or unsupported formats may
+              still be rejected by the backend.
+            </small>
           </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12, fontWeight: 600 }}>
+
+          <label>
             Reporting period
             <select
               value={period}
-              onChange={(e) => setPeriod(e.target.value)}
+              onChange={(event) => setPeriod(event.target.value)}
               disabled={busy}
             >
-              <option>Latest</option>
-              <option>FY2024</option>
-              <option>FY2023</option>
-              <option>FY2022</option>
-              <option>Quarterly</option>
+              <option value="Latest">Latest</option>
+              <option value="FY2024">FY2024</option>
+              <option value="FY2023">FY2023</option>
+              <option value="FY2022">FY2022</option>
+              <option value="Quarterly">Quarterly</option>
             </select>
           </label>
-          <button className="btn primary" disabled={busy} type="submit">
+
+          <button
+            className="btn primary"
+            type="submit"
+            disabled={busy || !ticker.trim()}
+          >
             {busy ? (
               <LoaderCircle size={15} className="spin" />
             ) : (
               <BarChart3 size={15} />
-            )}{" "}
-            Run analysis
+            )}
+            {busy ? "Analyzing..." : "Run analysis"}
           </button>
         </form>
-        {err && <ErrorBox message={err} />}
+
+        {error && <ErrorBox message={error} />}
+
+        <div className="financial-notice">
+          <Info size={17} />
+          <p>
+            Financial data availability depends on the backend source and
+            reporting periods. Metrics are displayed only when returned by
+            the API.
+          </p>
+        </div>
       </Panel>
 
-      <Panel title="Analysis output">
-        <Empty
-          title="Financial analysis endpoint not available"
-          description="The backend does not currently expose a POST /api/v1/financial-analysis endpoint. Financial analysis runs as part of the multi-agent research workflow (financial_analysis node). Submit a request above to confirm availability."
-        />
+      <Panel
+        title="Analysis output"
+        description={
+          data
+            ? `${company || ticker} · ${period}`
+            : "Your financial results will appear here."
+        }
+      >
+        {busy ? (
+          <div className="financial-loading">
+            <LoaderCircle size={22} className="spin" />
+            <p>Retrieving financial data and processing results...</p>
+          </div>
+        ) : data && cards.length > 0 ? (
+          <div className="financial-results">
+            <div className="financial-results-heading">
+              <div>
+                <span className="financial-eyebrow">COMPANY</span>
+                <h2>{company || ticker}</h2>
+                <p>{period} · SEC-sourced financial data</p>
+              </div>
+              <span className="financial-source-count">
+                <FileText size={14} />
+                {sources.length} source{sources.length === 1 ? "" : "s"}
+              </span>
+            </div>
+
+            <div className="financial-metric-grid">
+              {cards.map((card, index) => (
+                <article
+                  className="financial-metric-card"
+                  key={`${card.metric}-${card.period}-${index}`}
+                >
+                  <span>{labelMetric(card.metric)}</span>
+                  <strong>{formatValue(card)}</strong>
+                  <small>{card.period}</small>
+                  {card.sourceUrl && (
+                    <a
+                      href={card.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      View SEC source <ExternalLink size={12} />
+                    </a>
+                  )}
+                </article>
+              ))}
+            </div>
+
+            {sources.length > 0 && (
+              <section className="financial-sources">
+                <h3>Source evidence</h3>
+                <div className="financial-source-list">
+                  {sources.map((source) => (
+                    <a
+                      className="financial-source-item"
+                      key={source.sourceUrl}
+                      href={source.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <FileText size={16} />
+                      <span>
+                        <b>
+                          {labelMetric(source.metric)} · {source.period}
+                        </b>
+                        <small>{source.sourceId || source.sourceUrl}</small>
+                      </span>
+                      <ExternalLink size={14} />
+                    </a>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <details className="financial-raw-response">
+              <summary>
+                <ChevronDown size={14} />
+                Inspect raw API response
+              </summary>
+              <pre className="json">{JSON.stringify(data, null, 2)}</pre>
+            </details>
+          </div>
+        ) : data ? (
+          <div className="financial-empty-results">
+            <Empty
+              title="No financial metrics returned"
+              description="The request succeeded, but the response did not contain any recognized metric values. Inspect the raw response to identify the returned structure."
+            />
+            <details className="financial-raw-response" open>
+              <summary>Raw API response</summary>
+              <pre className="json">{JSON.stringify(data, null, 2)}</pre>
+            </details>
+          </div>
+        ) : (
+          <Empty
+            title="No analysis requested"
+            description="Run an analysis to view reported metrics, financial periods, and SEC source links."
+          />
+        )}
       </Panel>
 
-      <div className="notice">
-        <AlertCircle size={17} />
-        <span>
-          <b>Deterministic calculations.</b> Financial metrics (YoY/QoQ growth,
-          margins, CAGR, ratios) are computed by deterministic backend tools,
-          not by the LLM. A standalone analysis endpoint is not yet exposed.
-        </span>
+      <div className="financial-notice">
+        <Info size={17} />
+        <p>
+          Financial figures depend on available reported data. Calculations
+          should use compatible periods and units. This page is for research
+          and is not personalized investment advice.
+        </p>
       </div>
     </>
   );

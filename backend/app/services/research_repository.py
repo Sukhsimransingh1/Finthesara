@@ -196,3 +196,38 @@ class ResearchRepository:
             row for row in rows
             if isinstance(row, dict)
         ]
+    
+    def delete_run(
+        self,
+        *,
+        run_id: UUID,
+        user_id: UUID,
+    ) -> bool:
+        """Delete a research run after verifying project ownership."""
+
+        # Fetch the run and verify ownership of its project.
+        existing_run = self.get_run(
+            run_id=run_id,
+            user_id=user_id,
+        )
+
+        if existing_run is None:
+            return False
+
+        project_id = UUID(str(existing_run["project_id"]))
+
+        response = (
+            self.client.table("research_runs")
+            .delete()
+            .eq("id", str(run_id))
+            .eq("project_id", str(project_id))
+            .execute()
+        )
+
+        deleted_rows = getattr(response, "data", None)
+
+        return isinstance(deleted_rows, list) and any(
+            isinstance(row, dict)
+            and str(row.get("id")) == str(run_id)
+            for row in deleted_rows
+        )

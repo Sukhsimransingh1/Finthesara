@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import Annotated
@@ -16,12 +17,14 @@ from fastapi import (
 )
 
 from app.api.auth import get_current_user_id
+from app.db.supabase_client import get_supabase_client
 from app.services.document_persistence import (
     DocumentPersistenceService,
 )
 from app.services.document_service import DocumentIngestionService
 from app.services.research_repository import ResearchRepository
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 CurrentUser = Annotated[
@@ -127,9 +130,14 @@ async def upload_document(
             detail=str(exc),
         ) from exc
     except Exception as exc:
+        logger.exception(
+            "Document ingestion failed. project_id=%s filename=%s",
+            project_id,
+            Path(file.filename).name if file.filename else "unknown",
+        )
         raise HTTPException(
             status_code=500,
-            detail="Document ingestion failed.",
+            detail="Document ingestion failed. Check backend logs for details.",
         ) from exc
     finally:
         if temp_path is not None:
@@ -186,3 +194,44 @@ def list_documents(
             status_code=503,
             detail="Document listing is temporarily unavailable.",
         ) from exc
+
+@router.delete("/{document_id}")
+def delete_document(
+    document_id: UUID,
+    project_id: UUID,
+    current_user: CurrentUser,
+) -> dict[str, str]:
+    """Delete a project-owned document and its indexed chunks."""
+    repository = ResearchRepository()
+
+    try:
+        repository.assert_project_owner(project_id, current_user)
+    except PermissionError:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found or access denied.",
+        ) from None
+
+    try:
+        response = get_supabase_client().rpc(
+            "delete_project_document",
+            {
+                "p_document_id": str(document_id),
+                "p_project_id": str(project_id),
+                "p_user_id": str(current_user),
+            },
+        ).execute()
+    except Exception:
+        # Keep internal database details out of the API response.
+        raise HTTPException(
+            status_code=500,
+            detail="Document deletion failed. Check backend logs.",
+        ) from None
+
+    if response.data is not True:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found in the selected project.",
+        )
+
+    return {"message": "Document deleted successfully."}

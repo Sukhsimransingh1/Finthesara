@@ -1,6 +1,9 @@
+
 from __future__ import annotations
 
 import json
+import re
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
@@ -9,36 +12,46 @@ class LLMOutputError(RuntimeError):
     """Raised when an LLM response cannot be parsed safely."""
 
 
-def parse_json_object(content: str) -> dict[str, object]:
-    """Parse an LLM response containing a JSON object."""
+def parse_json_object(content: str) -> dict[str, Any]:
+    """Parse a complete JSON object from an LLM response."""
 
     text = content.strip()
 
     if not text:
         raise LLMOutputError("LLM returned an empty response.")
 
+    # Remove a Markdown JSON code fence when present.
     if text.startswith("```"):
-        lines = text.splitlines()
+        text = re.sub(r"^```(?:json)?\s*", "", text, count=1, flags=re.I)
+        text = re.sub(r"\s*```\s*$", "", text, count=1)
+        text = text.strip()
 
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-
-        text = "\n".join(lines).strip()
-
+    # First, try parsing the complete response.
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise LLMOutputError(
-            "LLM response was not valid JSON."
-        ) from exc
+    except json.JSONDecodeError as original_error:
+        # Some models wrap JSON in introductory or trailing text.
+        # Locate a JSON object and accept it only if it parses completely.
+        decoder = json.JSONDecoder()
+        start = text.find("{")
+
+        while start != -1:
+            try:
+                parsed, _ = decoder.raw_decode(text[start:])
+                break
+            except json.JSONDecodeError:
+                start = text.find("{", start + 1)
+        else:
+            raise LLMOutputError(
+                "LLM response was not valid complete JSON. "
+                f"Parser detail: {original_error.msg} "
+                f"(line {original_error.lineno}, "
+                f"column {original_error.colno}). "
+                "The response may be truncated."
+            ) from original_error
 
     if not isinstance(parsed, dict):
-        raise LLMOutputError(
-            "LLM response must be a JSON object."
-        )
+        raise LLMOutputError("LLM response must be a JSON object.")
 
     return parsed
 

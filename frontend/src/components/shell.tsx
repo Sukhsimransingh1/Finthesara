@@ -15,7 +15,7 @@ import {
   Menu,
 } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
-
+import { ProjectSwitcher } from "@/components/projects/ProjectSwitcher";
 type NavItem = readonly [string, string, typeof Home];
 
 type NavGroup = {
@@ -117,7 +117,7 @@ function ShellContent({ children }: { children: React.ReactNode }) {
           <i />
           Research workspace
         </div>
-
+        <ProjectSwitcher />
         <nav>
           {nav.map((group) => (
             <section key={group.group}>

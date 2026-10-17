@@ -75,3 +75,32 @@ def get_research_run(
         )
 
     return item
+
+@router.delete("/{run_id}")
+def delete_research_run(
+    run_id: UUID,
+    user_id: CurrentUser,
+) -> dict[str, str]:
+    try:
+        deleted = _repository().delete_run(
+            run_id=run_id,
+            user_id=user_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Research run not found or access denied.",
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Research storage is unavailable.",
+        ) from exc
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Research run not found.",
+        )
+
+    return {"message": "Research run deleted successfully."}

@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from typing import Any
@@ -21,15 +22,21 @@ class GroqLLMClient:
         temperature: float = 0.0,
         max_retries: int = 2,
         max_structured_retries: int = 2,
+        max_tokens: int = 8192,
     ) -> None:
         settings = get_settings()
         api_key = settings.llm_api_key
 
-        if api_key is None:
+        if not api_key:
             raise RuntimeError("LLM_API_KEY is not configured.")
 
         if max_structured_retries < 0:
-            raise ValueError("max_structured_retries must be non-negative.")
+            raise ValueError(
+                "max_structured_retries must be non-negative."
+            )
+
+        if max_tokens < 1:
+            raise ValueError("max_tokens must be positive.")
 
         self.model_name = model or settings.llm_model
         self.max_structured_retries = max_structured_retries
@@ -39,6 +46,7 @@ class GroqLLMClient:
             api_key=api_key,
             temperature=temperature,
             max_retries=max_retries,
+            max_tokens=max_tokens,
         )
 
     def invoke(
@@ -63,7 +71,6 @@ class GroqLLMClient:
             finish_reason=self._extract_finish_reason(response),
         )
 
-    
     def invoke_structured[T: BaseModel](
         self,
         *,
@@ -71,15 +78,35 @@ class GroqLLMClient:
         user_prompt: str,
         schema: type[T],
     ) -> tuple[T, LLMResponse]:
-        """Invoke the LLM and retry a bounded number of invalid outputs."""
+        """Invoke the LLM and retry invalid structured responses."""
 
-        current_prompt = user_prompt
         last_error: LLMOutputError | None = None
 
         for attempt in range(self.max_structured_retries + 1):
+            correction = ""
+
+            if attempt > 0 and last_error is not None:
+                correction = (
+                    "\n\nIMPORTANT: Your previous response could not "
+                    "be parsed or validated.\n"
+                    f"Reason: {last_error}\n"
+                    "Return one complete JSON object matching the "
+                    "requested schema. Do not use Markdown fences, "
+                    "comments, introductory text, or trailing text. "
+                    "Ensure every JSON string is properly escaped and "
+                    "every object and array is closed. Do not truncate "
+                    "the response. Include all required fields and "
+                    "do not invent financial facts."
+                )
+
             response = self.invoke(
-                system_prompt=system_prompt,
-                user_prompt=current_prompt,
+                system_prompt=(
+                    system_prompt
+                    + "\n\nFor structured output, return only one "
+                    "complete, valid JSON object. Follow the requested "
+                    "schema exactly."
+                ),
+                user_prompt=user_prompt + correction,
             )
 
             try:
@@ -88,28 +115,19 @@ class GroqLLMClient:
             except LLMOutputError as exc:
                 last_error = exc
 
-                if attempt >= self.max_structured_retries:
-                    break
+                finish_reason = (response.finish_reason or "").lower()
+                if finish_reason in {"length", "max_tokens"}:
+                    last_error = LLMOutputError(
+                        "The model reached its output limit and may "
+                        "have returned truncated JSON. Increase the "
+                        "output budget or reduce the requested output."
+                    )
 
-                current_prompt = (
-                    f"{user_prompt}\n\n"
-                    "CORRECTION REQUIRED: Your previous response did not "
-                    "satisfy the required JSON schema.\n"
-                    f"Validation error: {exc}\n"
-                    "Return a corrected, complete JSON object matching "
-                    "the schema exactly. Include every required field, "
-                    "use the correct types, and do not invent facts."
-                )
-
-        if last_error is not None:
-            raise LLMOutputError(
-                f"Structured output failed after "
-                f"{self.max_structured_retries + 1} attempts: "
-                f"{last_error}"
-            ) from last_error
-
-        raise LLMOutputError("Structured output failed unexpectedly.")
-
+        raise LLMOutputError(
+            f"Structured output failed after "
+            f"{self.max_structured_retries + 1} attempts: "
+            f"{last_error or 'Unknown structured-output error.'}"
+        ) from last_error
 
     @staticmethod
     def _extract_content(content: Any) -> str:
@@ -124,11 +142,8 @@ class GroqLLMClient:
             for item in content:
                 if isinstance(item, str):
                     parts.append(item)
-                    continue
-
-                if isinstance(item, dict):
+                elif isinstance(item, dict):
                     text_value = item.get("text")
-
                     if isinstance(text_value, str):
                         parts.append(text_value)
 
@@ -141,11 +156,7 @@ class GroqLLMClient:
     def _extract_usage(response: Any) -> LLMUsage:
         """Extract token usage from a LangChain response."""
 
-        usage_metadata = getattr(
-            response,
-            "usage_metadata",
-            None,
-        )
+        usage_metadata = getattr(response, "usage_metadata", None)
 
         if not isinstance(usage_metadata, dict):
             return LLMUsage()
@@ -154,16 +165,11 @@ class GroqLLMClient:
             "input_tokens",
             usage_metadata.get("prompt_tokens", 0),
         )
-
         completion_tokens = usage_metadata.get(
             "output_tokens",
             usage_metadata.get("completion_tokens", 0),
         )
-
-        total_tokens = usage_metadata.get(
-            "total_tokens",
-            0,
-        )
+        total_tokens = usage_metadata.get("total_tokens", 0)
 
         return LLMUsage(
             prompt_tokens=int(prompt_tokens or 0),
@@ -172,16 +178,10 @@ class GroqLLMClient:
         )
 
     @staticmethod
-    def _extract_finish_reason(
-        response: Any,
-    ) -> str | None:
+    def _extract_finish_reason(response: Any) -> str | None:
         """Extract the provider finish reason when available."""
 
-        response_metadata = getattr(
-            response,
-            "response_metadata",
-            None,
-        )
+        response_metadata = getattr(response, "response_metadata", None)
 
         if not isinstance(response_metadata, dict):
             return None

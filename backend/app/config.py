@@ -1,3 +1,4 @@
+
 """Environment-backed application configuration."""
 
 from functools import lru_cache
@@ -17,9 +18,18 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "agentic-finance-research"
-    app_environment: Literal["local", "development", "test", "staging", "production"] = "local"
+    app_environment: Literal[
+        "local",
+        "development",
+        "test",
+        "staging",
+        "production",
+    ] = "local"
     app_version: str = "0.1.0"
     log_level: str = "INFO"
+
+    # Local single-user mode; use the owner UUID of your Supabase project.
+    local_user_id: str = ""
 
     database_url: SecretStr | None = None
     supabase_url: str | None = None
@@ -39,8 +49,8 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=30, ge=1, le=300)
     sec_user_agent: str = ""
 
+
 @lru_cache
 def get_settings() -> Settings:
     """Return the process-wide settings instance."""
-
     return Settings()

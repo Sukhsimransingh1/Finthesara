@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 from datetime import date
-from pathlib import Path
 from uuid import UUID
 
 from app.schemas.ingestion import (

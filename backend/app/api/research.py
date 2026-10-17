@@ -16,9 +16,9 @@ from app.api.schemas import (
     ResearchResponse,
     ResearchStreamEvent,
 )
+from app.services.research_repository import ResearchRepository
 from app.services.research_runner import ResearchRunner
 from app.tools.sec_data_source import SECFinancialDataSource
-from app.services.research_repository import ResearchRepository
 
 logger = logging.getLogger(__name__)
 CurrentUser = Annotated[UUID, Depends(get_current_user_id)]

@@ -1,12 +1,14 @@
+
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
   Plus,
   Search,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import {
   api,
@@ -20,14 +22,19 @@ import { Heading, Panel, Empty, ErrorBox } from "@/components/ui";
 
 function getStoredRuns(): ResearchRun[] {
   if (typeof window === "undefined") return [];
+
   const runs: ResearchRun[] = [];
+
   try {
     for (let i = 0; i < window.localStorage.length; i++) {
       const key = window.localStorage.key(i);
+
       if (key && key.startsWith("finthesara_run_")) {
         const raw = window.localStorage.getItem(key);
+
         if (raw) {
           const r = JSON.parse(raw);
+
           runs.push({
             id: r.run_id,
             question: r.state?.original_question || "Research run",
@@ -39,11 +46,18 @@ function getStoredRuns(): ResearchRun[] {
       }
     }
   } catch {
-    /* ignore */
+    // Ignore malformed local-storage entries.
   }
-  return runs.sort((a, b) =>
-    new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime(),
+
+  return runs.sort(
+    (a, b) =>
+      new Date(b.updated_at || 0).getTime() -
+      new Date(a.updated_at || 0).getTime(),
   );
+}
+
+function isFailed(status: string | undefined): boolean {
+  return (status || "").toLowerCase() === "failed";
 }
 
 export default function History() {
@@ -51,72 +65,151 @@ export default function History() {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(true);
   const [err, setErr] = useState("");
+  const [notice, setNotice] = useState("");
   const [source, setSource] = useState<"api" | "local">("api");
+  const [deletingIds, setDeletingIds] = useState<string[]>([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
+    setBusy(true);
+    setErr("");
+
     try {
-      const res = await api(`/research-runs?project_id=${DEFAULT_PROJECT_ID}`);
-      const list = rows<ResearchRun>(res);
-      setData(list);
+      const res = await api(
+        `/research-runs?project_id=${DEFAULT_PROJECT_ID}`,
+      );
+
+      setData(rows<ResearchRun>(res));
       setSource("api");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Request failed";
       const stored = getStoredRuns();
+
       if (stored.length > 0) {
         setData(stored);
         setSource("local");
-        setErr(`${msg} — showing locally stored runs.`);
+        setErr(`${msg} — showing locally stored runs. Deletion is disabled.`);
       } else {
-        setErr(msg);
         setData([]);
+        setSource("local");
+        setErr(msg);
       }
     } finally {
       setBusy(false);
     }
-  }
-
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const res = await api(`/research-runs?project_id=${DEFAULT_PROJECT_ID}`);
-        if (!active) return;
-        const list = rows<ResearchRun>(res);
-        setData(list);
-        setSource("api");
-      } catch (e: unknown) {
-        if (!active) return;
-        const msg = e instanceof Error ? e.message : "Request failed";
-        const stored = getStoredRuns();
-        if (stored.length > 0) {
-          setData(stored);
-          setSource("local");
-          setErr(`${msg} — showing locally stored runs.`);
-        } else {
-          setErr(msg);
-          setData([]);
-        }
-      } finally {
-        if (active) setBusy(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
   }, []);
 
-  const shown = data.filter((x) =>
-    `${x.question || ""} ${x.status || ""} ${x.id || ""}`
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function deleteOne(run: ResearchRun) {
+    if (source !== "api" || !run.id) return;
+
+    const confirmed = window.confirm(
+      `Delete this research run?\n\n${run.question || run.id}\n\nThis action cannot be undone.`,
+    );
+
+    if (!confirmed) return;
+
+    setErr("");
+    setNotice("");
+    setDeletingIds((current) => [...current, run.id!]);
+
+    try {
+      await api(`/research-runs/${encodeURIComponent(run.id)}`, {
+        method: "DELETE",
+      });
+
+      setData((current) => current.filter((item) => item.id !== run.id));
+      setNotice("Research run deleted successfully.");
+    } catch (e: unknown) {
+      setErr(
+        e instanceof Error
+          ? `Could not delete research run: ${e.message}`
+          : "Could not delete research run.",
+      );
+    } finally {
+      setDeletingIds((current) =>
+        current.filter((id) => id !== run.id),
+      );
+    }
+  }
+
+  async function deleteFailedRuns() {
+    if (source !== "api" || bulkDeleting) return;
+
+    const failedRuns = data.filter(
+      (run) => isFailed(run.status) && Boolean(run.id),
+    );
+
+    if (failedRuns.length === 0) {
+      setNotice("There are no failed runs to delete.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete all ${failedRuns.length} failed research run(s)?\n\nOnly runs marked "failed" will be selected. This action cannot be undone.`,
+    );
+
+    if (!confirmed) return;
+
+    setBulkDeleting(true);
+    setErr("");
+    setNotice("");
+
+    const deletedIds: string[] = [];
+    const failures: string[] = [];
+
+    try {
+      for (const run of failedRuns) {
+        try {
+          await api(
+            `/research-runs/${encodeURIComponent(run.id!)}`,
+            { method: "DELETE" },
+          );
+          deletedIds.push(run.id!);
+        } catch {
+          failures.push(run.id!);
+        }
+      }
+
+      if (deletedIds.length > 0) {
+        setData((current) =>
+          current.filter((run) => !deletedIds.includes(run.id || "")),
+        );
+      }
+
+      if (failures.length > 0) {
+        setErr(
+          `${deletedIds.length} run(s) deleted. ${failures.length} could not be deleted. Refresh the list and check permissions or backend logs.`,
+        );
+      } else {
+        setNotice(`${deletedIds.length} failed run(s) deleted successfully.`);
+      }
+
+      // Reconcile the UI with the database after bulk deletion.
+      await load();
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
+  const shown = data.filter((run) =>
+    `${run.question || ""} ${run.status || ""} ${run.id || ""}`
       .toLowerCase()
       .includes(q.toLowerCase()),
   );
+
+  const failedCount = data.filter((run) => isFailed(run.status)).length;
+  const canDelete = source === "api" && !busy;
 
   return (
     <>
       <Heading
         eyebrow="WORKSPACE / HISTORY"
         title="Research history"
-        description="Browse investigation runs returned by the backend."
+        description="Browse, inspect, and manage investigation runs."
         action={
           <Link className="btn primary" href="/research/new">
             <Plus size={15} /> New investigation
@@ -126,20 +219,36 @@ export default function History() {
 
       <Panel
         title="All investigations"
-        description={`${busy ? "Loading" : shown.length} run(s) · ${source === "local" ? "local storage" : "backend"}`}
+        description={`${busy ? "Loading" : shown.length} run(s) · ${
+          source === "local" ? "local storage" : "backend"
+        }`}
         action={
-          <button
-            className="icon-btn"
-            onClick={() => {
-              setBusy(true);
-              setErr("");
-              load();
-            }}
-            aria-label="Refresh"
-            disabled={busy}
-          >
-            <RefreshCw size={15} className={busy ? "spin" : ""} />
-          </button>
+          <div className="flex items-center gap-2">
+            {failedCount > 0 && (
+              <button
+                type="button"
+                className="btn"
+                onClick={deleteFailedRuns}
+                disabled={!canDelete || bulkDeleting}
+                title="Delete all failed runs"
+              >
+                <Trash2 size={15} />
+                {bulkDeleting
+                  ? "Deleting…"
+                  : `Delete failed (${failedCount})`}
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => void load()}
+              aria-label="Refresh research history"
+              disabled={busy || bulkDeleting}
+            >
+              <RefreshCw size={15} className={busy ? "spin" : ""} />
+            </button>
+          </div>
         }
       >
         <div className="search">
@@ -152,6 +261,19 @@ export default function History() {
         </div>
 
         {err && <ErrorBox message={err} />}
+
+        {notice && (
+          <p className="muted" role="status">
+            {notice}
+          </p>
+        )}
+
+        {source === "local" && (
+          <p className="muted">
+            Showing locally stored entries. Connect to the backend to delete
+            database records.
+          </p>
+        )}
 
         {busy ? (
           <p className="muted">Loading…</p>
@@ -168,29 +290,66 @@ export default function History() {
                   <th>Question</th>
                   <th>Status</th>
                   <th>Created</th>
-                  <th />
+                  <th>Actions</th>
                 </tr>
               </thead>
+
               <tbody>
-                {shown.map((r, i) => (
-                  <tr key={r.id || i}>
-                    <td>
-                      <b>{r.question || "Research run"}</b>
-                      <small>{r.id || "ID unavailable"}</small>
-                    </td>
-                    <td>
-                      <span className={`pill ${statusClass(r.status)}`}>
-                        {r.status || "Unknown"}
-                      </span>
-                    </td>
-                    <td>{dateLabel(r.created_at || r.updated_at)}</td>
-                    <td>
-                      <Link className="table-link" href={`/research/${r.id}`}>
-                        Open <ArrowRight size={13} />
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
+                {shown.map((run, index) => {
+                  const deleting =
+                    Boolean(run.id) && deletingIds.includes(run.id!);
+
+                  return (
+                    <tr key={run.id || index}>
+                      <td>
+                        <b>{run.question || "Research run"}</b>
+                        <small>{run.id || "ID unavailable"}</small>
+                      </td>
+
+                      <td>
+                        <span className={`pill ${statusClass(run.status)}`}>
+                          {run.status || "Unknown"}
+                        </span>
+                      </td>
+
+                      <td>{dateLabel(run.created_at || run.updated_at)}</td>
+
+                      <td>
+                        <div className="flex items-center gap-3">
+                          {run.id && (
+                            <Link
+                              className="table-link"
+                              href={`/research/${run.id}`}
+                            >
+                              Open <ArrowRight size={13} />
+                            </Link>
+                          )}
+
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            aria-label={`Delete research run ${
+                              run.question || run.id || ""
+                            }`}
+                            title="Delete research run"
+                            disabled={
+                              !canDelete ||
+                              !run.id ||
+                              deleting ||
+                              bulkDeleting
+                            }
+                            onClick={() => void deleteOne(run)}
+                          >
+                            <Trash2
+                              size={15}
+                              className={deleting ? "spin" : ""}
+                            />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

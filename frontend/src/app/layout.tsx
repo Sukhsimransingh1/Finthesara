@@ -1,11 +1,12 @@
+
 import type { Metadata } from "next";
 import "./globals.css";
 import { Shell } from "@/components/shell";
+import { ProjectProvider } from "@/components/projects/ProjectProvider";
 
 export const metadata: Metadata = {
-  title: "Finthesara — AI Financial Research & Intelligence",
-  description:
-    "Finthesara is an evidence-first financial research platform that uses AI agents to investigate companies, analyze financial information, retrieve relevant documents, verify claims, and produce traceable research reports.",
+  title: "Finthesara | Financial Intelligence",
+  description: "Evidence-led financial research workspace",
 };
 
 export default function RootLayout({
@@ -16,7 +17,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <Shell>{children}</Shell>
+        <ProjectProvider>
+          <Shell>{children}</Shell>
+        </ProjectProvider>
       </body>
     </html>
   );

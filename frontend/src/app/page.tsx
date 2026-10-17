@@ -25,7 +25,7 @@ export default function Home() {
           </span>
         </Link>
         <div>
-          <Link href="/login">Sign in</Link>
+          
           <Link href="/dashboard" className="btn primary">
             Open workspace <ArrowRight size={15} />
           </Link>
