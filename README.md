@@ -1,7 +1,7 @@
 # Finthesara — Agentic Finance Research & Intelligence
 
 **Financial research. Reasoned and verified.**
-
+Demo video : https://drive.google.com/file/d/1bpWqxis1pgkvDU2R_e3cinGL4Hb3o8Fx/view?usp=drive_link
 Finthesara is an AI-powered financial research and intelligence platform designed to help users investigate companies, analyze financial information, retrieve insights from indexed documents, and generate structured research reports grounded in supporting evidence.
 
 Instead of relying on a single LLM response, Finthesara combines **agentic workflows, financial analysis tools, hybrid retrieval-augmented generation (RAG), evidence verification, and observable execution** to create a more structured and traceable financial research experience.
