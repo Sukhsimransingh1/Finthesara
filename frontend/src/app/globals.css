@@ -1628,3 +1628,10 @@ body {
     font-size: 19px;
   }
 }
+.brand b {
+  color: #0D2854;
+}
+
+.brand small {
+  color: #64748b;
+}
